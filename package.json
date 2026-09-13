@@ -1,13 +1,32 @@
 {
   "name": "patronus",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "description": "Independent persistent web reader and authenticated MCP service.",
+  "engines": {
+    "node": ">=22.22.0"
+  },
   "scripts": {
-    "start": "node server.js",
+    "start": "node src/gateway.js",
+    "reader": "node src/patronus/server.js",
     "test": "node --test"
   },
-  "engines": {
-    "node": ">=22"
+  "dependencies": {
+    "@modelcontextprotocol/express": "2.0.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "express": "5.2.1",
+    "ipaddr.js": "2.5.0",
+    "jose": "6.2.12",
+    "linkedom": "0.18.13",
+    "oidc-provider": "9.12.2",
+    "playwright": "1.63.0",
+    "turndown": "7.2.4",
+    "turndown-plugin-gfm": "1.0.2",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0"
   }
 }
