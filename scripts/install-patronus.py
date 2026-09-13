@@ -87,7 +87,7 @@ User=patronus-gateway
 Group=patronus-gateway
 SupplementaryGroups=patronus
 ExecStart=/usr/bin/node {target}/src/gateway.js
-Environment=PORT=8793
+Environment=PORT=8794
 Environment=PATRONUS_BASE_URL=https://mcp.jensenabler.com/patronus
 Environment=PATRONUS_RELEASE={revision}
 StateDirectory=patronus-gateway

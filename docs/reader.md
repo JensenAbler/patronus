@@ -1,4 +1,10 @@
-# Patronus v1
+# Historical reader implementation and acceptance evidence
+
+This document preserves pre-extraction checkpoints. For current setup, see
+[deployment](deployment.md) and the repository README. Statements below about
+Praxis ownership or pending deployment describe the historical checkpoint.
+
+## Patronus v1
 Patronus is a persistent web reader on Alpha, exposed through the existing authenticated Praxis MCP connection. It runs as its own unprivileged service. Source remains in this repository; no new repository is required.
 
 Tools: patronus_capabilities, patronus_start, patronus_status, patronus_jobs, patronus_result, patronus_artifact, patronus_cancel.

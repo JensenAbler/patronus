@@ -14,10 +14,9 @@ The HTTPS nginx configuration is deploy/patronus-nginx.conf, included inside the
 existing mcp.jensenabler.com TLS server. Discovery aliases are path-qualified so
 other applications on the host retain their own OAuth metadata.
 
-A one-time copy of the owner's existing password hash can retain the familiar
-password without depending on the other application at runtime. Signing keys,
-cookie keys, tokens, clients, and grants must be independently generated.
-No credentials or data directories should be copied from Praxis into this repository.
+Use independent generated credentials. The initial password is stored in the
+root-only /etc/patronus/login.txt on Alpha. Signing keys, cookie keys, clients,
+and grants are separate from all other applications.
 
 Rollback by restoring previous-service.unit and previous-gateway.unit from the
 new release, daemon-reloading, and restarting both Patronus units. Never restore

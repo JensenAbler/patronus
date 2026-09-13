@@ -60,7 +60,7 @@ export function configFromEnvironment() {
 let entry=false;try{entry=process.argv[1]&&realpathSync(process.argv[1])===realpathSync(fileURLToPath(import.meta.url));}catch{}
 if(entry){
  const service=await createApp(configFromEnvironment());
- const http=service.app.listen(Number(process.env.PORT||8793),'127.0.0.1',()=>console.log('Patronus MCP listening'));
+ const http=service.app.listen(Number(process.env.PORT||8794),'127.0.0.1',error=>{if(error){console.error('patronus_listen_failed');process.exit(1);}console.log('Patronus MCP listening');});
  let closing=false;for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{
   if(closing)return;closing=true;setTimeout(()=>process.exit(1),10000).unref();
   http.close(async()=>{try{await service.close();process.exit(0);}catch{process.exit(1);}});
