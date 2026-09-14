@@ -161,7 +161,13 @@ export async function createAuth({ issuer, resourceUrl, passwordHash, jwks, cook
     const csrf = randomBytes(32).toString('base64url');
     db.prepare('INSERT OR REPLACE INTO csrf(uid,hash,expires) VALUES(?,?,?)').run(detail.uid, digest(csrf), now() + 300);
     const login = detail.prompt.name === 'login';
-    const host = new URL(detail.params.redirect_uri).hostname;
+    // interactionDetails has already validated this client's redirect URI.
+    // Browsers apply form-action to the final cross-origin OAuth redirect too.
+    const callback = new URL(detail.params.redirect_uri);
+    if (!/^https?:\/\/[a-z0-9.[\]:-]+$/i.test(callback.origin)) throw new Error('Unsupported callback origin');
+    res.set('Content-Security-Policy', String(res.get('Content-Security-Policy')).replace(
+      "form-action 'self'", `form-action 'self' ${callback.origin}`));
+    const host = callback.hostname;
     const rights = 'This connection can read websites using your configured sessions, download files, inspect retrieved content and browsing jobs, cancel retrievals, and reconnect later.';
     res.type('html').send(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Patronus</title>
       <style>body{font:18px system-ui;max-width:32rem;margin:3rem auto;padding:1.5rem;line-height:1.5}input,button{font:inherit;padding:.7rem;box-sizing:border-box;width:100%;margin:.5rem 0}small{display:block;overflow-wrap:anywhere}.error{color:#a20}</style>

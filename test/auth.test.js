@@ -72,6 +72,7 @@ async function fixture(t, { integrated = false, codingEnabled = false } = {}) {
       } else if (response.status === 200) {
         // The browser's native form submission must retain its real Origin header.
         assert.equal(response.headers.get('referrer-policy'), 'strict-origin');
+        assert.ok(response.headers.get('content-security-policy').includes("form-action 'self' " + new URL(client.redirect_uris[0]).origin + ';'));
         const html = await response.text();
         assert.match(html, /<title>Patronus<\/title>/);
         assert.match(html, /<h1>(Sign in to|Connect) Patronus<\/h1>/);
@@ -208,4 +209,38 @@ test('Patronus endpoint publishes discovery aliases and serves MCP only after re
     assert.equal(final.structuredContent.obstacles[0].code,'NETWORK_POLICY');
   } finally { await client.close(); }
   assert.equal(metadata.authorization_endpoint, `${f.issuer}/auth`);
+});
+
+test('real browser follows consent redirect and completes authenticated MCP', { skip: !process.env.PATRONUS_TEST_CHROMIUM }, async (t) => {
+  const { chromium } = await import('playwright');
+  const f = await fixture(t, { integrated: true });
+  const registration = await f.register();
+  const browser = await chromium.launch({ executablePath: process.env.PATRONUS_TEST_CHROMIUM, headless: true, args: process.getuid?.() === 0 ? ['--no-sandbox'] : [] });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  const callback = registration.redirect_uris[0];
+  let completed;
+  await page.route(callback + '**', async route => {
+    completed = new URL(route.request().url());
+    await route.fulfill({ status: 200, body: 'Callback reached' });
+  });
+  const verifier = randomBytes(32).toString('base64url');
+  const params = new URLSearchParams({ client_id: registration.client_id, redirect_uri: callback, response_type: 'code', scope: 'openid patronus:read', resource: f.resource, state: 'browser-test', code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' });
+  await page.goto(f.issuer + '/auth?' + params);
+  await page.locator('input[name=password]').fill('fixture-owner-password');
+  await page.locator('button[value=allow]').click();
+  await page.getByText('Allow the permissions described above?', { exact: true }).waitFor();
+  await page.locator('button[value=allow]').click();
+  await page.waitForURL(callback + '**', { timeout: 5000 });
+  assert.equal(completed.searchParams.get('error'), null);
+  assert.equal(completed.searchParams.get('state'), 'browser-test');
+  const response = await f.exchange(registration, { code: completed.searchParams.get('code'), verifier });
+  assert.equal(response.status, 200);
+  const token = await response.json();
+  const client = new Client({ name: 'browser-regression', version: '1.0.0' });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(f.resource), { requestInit: { headers: { Authorization: 'Bearer ' + token.access_token } } }));
+    assert.equal((await client.listTools()).tools.length, 7);
+    assert.equal((await client.callTool({ name: 'patronus_capabilities', arguments: {} })).structuredContent.ok, true);
+  } finally { await client.close(); }
 });
