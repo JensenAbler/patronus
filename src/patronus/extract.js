@@ -18,7 +18,7 @@ export function extract(html,url) {
     }catch{}
   }
   const converter=new TurndownService({headingStyle:'atx'});converter.use(gfm);
-  let markdown=converter.turndown(document.body?.innerHTML||html);
+  let markdown=converter.turndown(document.body?.innerHTML??document.documentElement?.outerHTML??'');
   const truncated=markdown.length>500000;markdown=markdown.slice(0,500000);
   return {title,markdown,links,images,coverage:{textTruncated:truncated,iframes:document.querySelectorAll('iframe').length,scope:'Rendered/extracted document; unvisited links and frames are not claimed complete.'}};
 }

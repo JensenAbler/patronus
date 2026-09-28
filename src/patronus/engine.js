@@ -7,6 +7,8 @@ import { Transform } from 'node:stream';
 import { chromium } from 'playwright';
 import { request, safeURL, displayURL, fault, startProxy, resolvePublic, agent } from './network.js';
 import { extract } from './extract.js';
+import { browserRequestPolicy, blockedRequest, continueBrowserRequest } from './browser-policy.js';
+import { trackRequests, waitForReadiness } from './readiness.js';
 const terminal=new Set(['succeeded','partial','failed','cancelled']);
 const now=()=>new Date().toISOString();
 const digest=b=>createHash('sha256').update(b).digest('hex');
@@ -25,7 +27,7 @@ export class Patronus {
  save(d){this.db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify(d),d.jobId);}
  get(id){const r=this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);if(!r)throw fault('NOT_FOUND');return {args:JSON.parse(r.input),data:JSON.parse(r.data)};}
  status({jobId}){return this.get(jobId).data;}
- capabilities(){return {name:'Patronus',version:'0.2.0',home:'Alpha',modes:['read','download','explore'],rendering:['http','browser','auto'],inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting, challenge solving or interactive credential requests','Browser non-GET/HEAD requests blocked','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
+ capabilities(){return {name:'Patronus',version:'0.3.0',home:'Alpha',modes:['read','download','explore'],rendering:['http','browser','auto'],inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting, challenge solving or interactive credential requests','Browser permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; other methods/operations blocked','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
  start(args){
   for(const u of args.urls)safeURL(u);
   if(args.resumeJobId){
@@ -133,30 +135,50 @@ export class Patronus {
    const imported=join(profile,'access.json');
    if(existsSync(imported)){const state=JSON.parse(readFileSync(imported,'utf8'));await context.addCookies(state.cookies||[]);}
    await context.route('**/*',async route=>{
+    const req=route.request();
     try{
      if(signal.aborted)throw fault('CANCELLED');
-     const req=route.request();
-     if(!['GET','HEAD'].includes(req.method()))throw fault('METHOD_POLICY');
+     const decision=browserRequestPolicy(req);
+     if(!decision.allowed)throw fault(decision.reason);
      if(!['http:','https:'].includes(new URL(req.url()).protocol))throw fault('URL_POLICY');
      await resolvePublic(req.url());
      this.budget(d,args);
-     await route.continue();
-    }catch{if(d.obstacles.length<50)d.obstacles.push({code:'SUBREQUEST_BLOCKED',message:'A page request exceeded retrieval/network policy.'});await route.abort();}
+     await continueBrowserRequest(route,decision);
+    }catch(e){if(d.obstacles.length<50)d.obstacles.push(blockedRequest(req,e.code||'REQUEST_FAILED'));await route.abort();}
    });
    await context.routeWebSocket('**/*',ws=>ws.close());
    const page=context.pages()[0]||await context.newPage();
+   const tracker=trackRequests(page);
    page.on('dialog',dialog=>dialog.dismiss());
    page.on('response',r=>{if(d.trace.length<200)d.trace.push({at:now(),url:displayURL(r.url()),status:r.status(),client:agent,route:'browser'});});
    page.on('download',download=>download.cancel());
    const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:Math.min(60000,args.timeoutSeconds*1000)});
-   await page.waitForLoadState('networkidle',{timeout:5000}).catch(()=>{});
    for(let n=0;n<3;n++){await page.evaluate(()=>window.scrollBy(0,window.innerHeight));await page.waitForTimeout(200);}
+   const readiness=await waitForReadiness(page,tracker,{timeoutMs:(args.browserWaitSeconds??20)*1000,minWaitMs:5000,selector:args.waitForSelector,signal});
+   tracker.close();
+   if(readiness.outcome==='timeout')d.obstacles.push({code:'PAGE_NOT_SETTLED',url:displayURL(page.url()),message:'Readiness budget expired; captured available content.',...readiness});
    const code=response?.status()||0;
    if(code>=400){await this.browserFailure(page,response,d,args,'HTTP_ERROR');throw fault(code===401?'AUTH_REQUIRED':code===403?'ACCESS_DENIED':code===402?'PAYMENT_REQUIRED':code===429?'RATE_LIMIT':'HTTP_ERROR','HTTP '+code);}
    const html=await page.content(),final=page.url(),out=extract(html,final);
    if(/^(just a moment|access denied|verify you are human)/i.test(out.title.trim())){await this.browserFailure(page,response,d,args,'CHALLENGE');throw fault('CHALLENGE','The page requires a challenge; no human-input loop is available.');}
    if(await page.locator('input[type=password]').count())out.coverage.possibleLoginPage=true;
-   out.url=displayURL(final);out.route='browser';
+   out.url=displayURL(final);out.route='browser';out.coverage.readiness=readiness;
+   out.frames=[];
+   const childFrames=page.frames().filter(f=>f!==page.mainFrame());
+   for(const frame of childFrames.slice(0,10)){
+    try{
+     const frameUrl=frame.url();if(!/^https?:/.test(frameUrl))continue;
+     const item=extract(await frame.content(),frameUrl);
+     item.url=displayURL(frameUrl);
+     item.links=item.links.map(l=>({...l,url:displayURL(l.url)}));
+     item.images=item.images.map(i=>({...i,url:displayURL(i.url),retrievalError:'FRAME_IMAGE_NOT_FETCHED'}));
+     out.frames.push(item);
+    }catch{out.coverage.frameErrors=(out.coverage.frameErrors||0)+1;}
+   }
+   out.coverage.framesCaptured=out.frames.length;
+   out.coverage.framesOmitted=childFrames.length-out.frames.length;
+   out.coverage.scope='Rendered main document and captured frames; readiness is an observation, not proof of completeness.';
+
    if(args.screenshot){
     const b=await page.screenshot({fullPage:false});this.budget(d,args,b.length);d.bytes+=b.length;
     const id=randomUUID();writeFileSync(join(this.root,'jobs',d.jobId,id),b,{mode:0o600});

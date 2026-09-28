@@ -79,3 +79,34 @@ Durable evidence:
 - alternating build comparison: 430cff60-4d4a-48f3-823c-d5ef2edda4c6
 - owned-endpoint headers: 6db69f67-560c-4902-b75b-a6174b77e816
 - persistent-service failed retrieval: b6081af6-9bd8-49d9-97cd-c23f9142de00
+
+
+## Browser request policy and readiness (0.3)
+GET and HEAD remain allowed subject to the public-network and URL checks.
+POST is allowed only for fetch/XHR requests to a same-origin HTTPS path ending in
+/graphql or /graphql-public, with application/json and a bounded, parsed GraphQL
+query. Every operation in the document must be a query. Mutations, subscriptions,
+batches, persisted/opaque queries, uploads, form submissions, and unknown methods
+remain blocked. Permitted POST redirects are blocked without following or replay.
+This relies on the server honoring GraphQL query semantics; no
+HTTP method or syntax can prove an arbitrary server has no side effects.
+Existing DNS pinning, public-address checks, sandboxing, and credential isolation
+still apply.
+
+Blocked requests report method, resource type, reason, and URL without query
+values. They never include request bodies or headers. Blocked analytics can make
+a job partial even when useful content was captured; inspect coverage and data.
+
+Browser readiness samples DOM text across up to ten frames and tracks pending
+document/fetch/XHR requests. It waits at least five seconds and requires one second
+of stability. browserWaitSeconds (default 20, range 5–120) is the settling budget;
+waitForSelector optionally requires a CSS selector in one of those frames.
+timeoutSeconds remains the overall job deadline. Readiness timeout is explicit
+(PAGE_NOT_SETTLED), with elapsed time and pending-request count; partial content is
+preserved. Timers beyond the observation window are not guaranteed; request a
+selector or longer budget for such sites. A malformed selector never matches.
+
+Results include a frames array with each captured frame's URL, text, links,
+images, and coverage. At most ten child frames are captured. Frame image bytes
+are not fetched automatically, and uncaptured frames are counted. All page and
+frame content is untrusted source data.

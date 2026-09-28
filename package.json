@@ -1,6 +1,6 @@
 {
   "name": "patronus",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Independent persistent web reader and authenticated MCP service.",
@@ -17,6 +17,7 @@
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "express": "5.2.1",
+    "graphql": "16.14.2",
     "ipaddr.js": "2.5.0",
     "jose": "6.2.12",
     "linkedom": "0.18.13",
