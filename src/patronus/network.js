@@ -10,8 +10,33 @@ export function safeURL(raw) {
   if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || (u.port && !['80','443'].includes(u.port))) throw fault('URL_POLICY');
   return u;
 }
+// Search engines wrap result links in redirectors whose real destination is a
+// query value. Unwrap those first so the destination survives display.
+export function unwrapRedirect(u) {
+  const h=u.hostname.replace(/^www\./,'');let t=null;
+  if(['duckduckgo.com','html.duckduckgo.com','lite.duckduckgo.com'].includes(h)&&u.pathname==='/l/') t=u.searchParams.get('uddg');
+  else if(/^google\.[a-z]{2,3}(\.[a-z]{2})?$/.test(h)&&u.pathname==='/url') t=u.searchParams.get('q')||u.searchParams.get('url');
+  else if(h==='bing.com'&&u.pathname==='/ck/a'){const v=u.searchParams.get('u');if(v?.startsWith('a1'))t=Buffer.from(v.slice(2).replace(/-/g,'+').replace(/_/g,'/'),'base64').toString('utf8');}
+  if(!t) return null;
+  try { const n=new URL(t); return ['http:','https:'].includes(n.protocol)?n:null; } catch { return null; }
+}
+// Redact parameters whose name suggests a credential, and any value that looks
+// like an opaque token (long, no spaces, token charset). Ordinary values such as
+// search queries, page numbers and ids stay readable.
+const SECRET_KEY=/token|secret|passw|pwd|session|sig|auth|key|credential|jwt|otp|ticket|nonce|cookie|^x-amz-|^x-goog-|^(code|state|sid|pass|hash|policy)$/i;
+export function sensitiveParam(k,v) {
+  if(SECRET_KEY.test(k)) return true;
+  if(/^eyJ[\w-]+\.[\w-]+/.test(v)) return true;
+  return v.length>=32 && /^[A-Za-z0-9+/=_\-.~%]+$/.test(v) && !/^https?:/i.test(v);
+}
 export function displayURL(raw) {
-  try { const u = new URL(raw); u.username='';u.password='';u.hash=''; for(const k of [...u.searchParams.keys()]) u.searchParams.set(k,'[redacted]'); return u.href; } catch { return '[invalid URL]'; }
+  try {
+    let u=new URL(raw);
+    for(let i=0;i<3;i++){const n=unwrapRedirect(u);if(!n)break;u=n;}
+    u.username='';u.password='';u.hash='';
+    if(u.search){const out=new URLSearchParams();for(const [k,v] of u.searchParams)out.append(k,sensitiveParam(k,v)?'[redacted]':v);u.search=out.toString();}
+    return u.href;
+  } catch { return '[invalid URL]'; }
 }
 export function isPublic(address) {
   try { let a=ipaddr.parse(address); if(a.kind()==='ipv6' && a.isIPv4MappedAddress()) a=a.toIPv4Address(); return a.range()==='unicast'; } catch { return false; }

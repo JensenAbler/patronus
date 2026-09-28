@@ -14,6 +14,22 @@ test('Patronus rejects internal addresses and mixed DNS answers',async()=>{
  for(const u of ['file:///etc/passwd','http://u:p@example.com','http://example.com:22'])assert.throws(()=>safeURL(u));
  assert.equal(displayURL('https://e.com/x?token=secret#secret'),'https://e.com/x?token=%5Bredacted%5D');
 });
+test('Patronus unwraps search redirects and redacts only secret-looking params',()=>{
+ const R='%5Bredacted%5D';
+ assert.equal(displayURL('https://duckduckgo.com/l/?uddg=https%3A%2F%2Fnitter.example%2Fxikhar&rut=0f3a9c6e1b2d4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a'),'https://nitter.example/xikhar');
+ assert.equal(displayURL('https://www.google.com/url?q=https://example.com/page&sa=U'),'https://example.com/page');
+ const b64=Buffer.from('https://example.com/bing-target').toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+ assert.equal(displayURL('https://www.bing.com/ck/a?!&&p=abc&u=a1'+b64+'&ntb=1'),'https://example.com/bing-target');
+ assert.equal(displayURL('https://duckduckgo.com/l/?uddg='+encodeURIComponent('https://e.com/x?api_key=hunter2&page=2')),'https://e.com/x?api_key='+R+'&page=2');
+ assert.equal(displayURL('https://html.duckduckgo.com/html/?q=wildbrush+site%3Ax.com'),'https://html.duckduckgo.com/html/?q=wildbrush+site%3Ax.com');
+ assert.equal(displayURL('https://github.com/search?q=wildbrush&type=repositories'),'https://github.com/search?q=wildbrush&type=repositories');
+ assert.equal(displayURL('https://b.s3.amazonaws.com/f?X-Amz-Signature=abc&X-Amz-Credential=def&v=1'),'https://b.s3.amazonaws.com/f?X-Amz-Signature='+R+'&X-Amz-Credential='+R+'&v=1');
+ assert.equal(displayURL('https://e.com/cb?code=4%2F0Adeu5B&state=xyz'),'https://e.com/cb?code='+R+'&state='+R);
+ assert.equal(displayURL('https://e.com/d?dl=aGVsbG8td29ybGQtdGhpcy1pcy1vcGFxdWUtYmxvYg'),'https://e.com/d?dl='+R);
+ assert.equal(displayURL('https://e.com/v?t=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOjF9.sig'),'https://e.com/v?t='+R);
+ assert.equal(displayURL('https://evil.example/l/?uddg=https%3A%2F%2Fother.example'),'https://evil.example/l/?uddg=https%3A%2F%2Fother.example');
+ assert.equal(displayURL('https://duckduckgo.com/l/?uddg=javascript%3Aalert(1)'),'https://duckduckgo.com/l/?uddg=javascript%3Aalert%281%29');
+});
 test('Patronus preserves relationships and excludes executable content',()=>{
  const r=extract('<html><head><title>Sample</title></head><body><h1>Heading</h1><figure><img src="/a.png" alt="A"><figcaption>Caption</figcaption></figure><table><tr><th>A</th></tr><tr><td>B</td></tr></table><a href="/next">Next</a><script>steal()</script></body></html>','https://example.com/');
  assert.match(r.markdown,/# Heading/);assert.match(r.markdown,/patronus-image:0/);assert.equal(r.images[0].caption,'Caption');assert.equal(r.images[0].url,'https://example.com/a.png');assert.doesNotMatch(r.markdown,/steal/);assert.equal(r.links[0].url,'https://example.com/next');
