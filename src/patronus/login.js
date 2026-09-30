@@ -98,7 +98,9 @@ export async function x10Login(engine,d,args,signal) {
   if(challenge) {
    stage='CHALLENGE';
    state.challengeArmed=true;
-   await challenge.locator('#recaptcha-anchor').click({timeout:5000}).catch(()=>{});
+   const verification={clickOutcome:'pending'};
+   await challenge.locator('#recaptcha-anchor').click({timeout:5000})
+    .then(()=>verification.clickOutcome='clicked',e=>verification.clickOutcome=e.name==='TimeoutError'?'timeout':'failed');
    const deadline=Date.now()+15000;
    let ready=false;
    while(Date.now()<deadline&&!signal.aborted) {
@@ -109,7 +111,17 @@ export async function x10Login(engine,d,args,signal) {
     await page.waitForTimeout(500);
    }
    state.challengeArmed=false;
-   if(!ready)throw fault('HUMAN_CHALLENGE_REQUIRED');
+   if(!ready) {
+    verification.anchorChecked=await challenge.locator('#recaptcha-anchor').getAttribute('aria-checked').catch(()=>null);
+    verification.frameText=[];
+    for(const frame of page.frames().filter(f=>/^https:\/\/www\.google\.com\/recaptcha\/api2\/(anchor|bframe)/.test(f.url()))) {
+     const text=await frame.locator('body').innerText({timeout:2000}).catch(()=>'');
+     const imageVisible=await frame.locator('.rc-imageselect').isVisible().catch(()=>false);
+     verification.frameText.push({kind:frame.url().includes('/bframe')?'challenge':'checkbox',text:text.slice(0,1600),imageVisible});
+    }
+    d.verificationDiagnostic=verification;engine.save(d);
+    throw fault(verification.frameText.some(f=>f.imageVisible)?'INTERACTIVE_CHALLENGE_PRESENT':verification.clickOutcome==='timeout'?'VERIFICATION_CHECKBOX_UNAVAILABLE':'VERIFICATION_NOT_COMPLETED');
+   }
   }
   stage='CREDENTIAL_FILL';
   state.credentialsFilled=true;
