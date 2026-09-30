@@ -44,7 +44,8 @@ export async function x10Login(engine,d,args,signal) {
  const credentials=readX10Credentials(engine.root);
  const profile=join(engine.root,'profiles','x10');
  mkdirSync(profile,{recursive:true,mode:0o700});
- let context, observedBytes=0;
+ let context, observedBytes=0, stage='BROWSER_START';
+ const blocked={};
  const state={submitArmed:false,submitted:false,challengeArmed:false};
  const proxy=await startProxy({signal,maxBytes:args.maxBytes-d.bytes,onBytes:n=>{d.bytes+=n-observedBytes;observedBytes=n;}});
  try {
@@ -61,13 +62,16 @@ export async function x10Login(engine,d,args,signal) {
     await resolvePublic(req.url());
     engine.budget(d,args);
     await continueBrowserRequest(route,decision);
-   } catch { await route.abort().catch(()=>{}); }
+   } catch(e) { const code=/^[A-Z_]+$/.test(e.code||'')?e.code:'REQUEST_FAILED';blocked[code]=(blocked[code]||0)+1;await route.abort().catch(()=>{}); }
   });
   await context.routeWebSocket('**/*',ws=>ws.close());
   const page=context.pages()[0]||await context.newPage();
   page.on('dialog',dialog=>dialog.dismiss());
   page.on('download',download=>download.cancel());
-  const response=await page.goto(X10_LOGIN,{waitUntil:'domcontentloaded',timeout:30000});
+  stage='NAVIGATION';
+  const response=await page.goto(X10_LOGIN,{waitUntil:'commit',timeout:30000});
+  stage='PAGE_READY';
+  await page.waitForTimeout(5000);
   if(response?.status()>=400)throw fault(response.status()===403?'ACCESS_DENIED':'HTTP_ERROR');
   const authenticated=async()=>{
    const u=new URL(page.url());
@@ -79,6 +83,7 @@ export async function x10Login(engine,d,args,signal) {
    login:{authenticated:true,freshLogin:false,outcome:'EXISTING_SESSION',verifiedAt:new Date().toISOString()},
    coverage:{scope:'Authenticated portal marker verified; a fresh credential login was not performed.'}};
 
+  stage='LOGIN_FORM';
   await page.locator('input[type=password]').waitFor({state:'visible',timeout:15000});
   if(new URL(page.url()).origin!==origin)throw fault('LOGIN_ORIGIN_MISMATCH');
   const form=page.locator('form').filter({has:page.locator('input[type=password]')});
@@ -91,6 +96,7 @@ export async function x10Login(engine,d,args,signal) {
   // No CAPTCHA solver, forged token, alternate IP, or challenge bypass is used.
   const challenge=page.frames().find(f=>f.url().startsWith('https://www.google.com/recaptcha/api2/anchor'));
   if(challenge) {
+   stage='CHALLENGE';
    state.challengeArmed=true;
    await challenge.locator('#recaptcha-anchor').click({timeout:5000}).catch(()=>{});
    const deadline=Date.now()+15000;
@@ -105,11 +111,13 @@ export async function x10Login(engine,d,args,signal) {
    state.challengeArmed=false;
    if(!ready)throw fault('HUMAN_CHALLENGE_REQUIRED');
   }
+  stage='CREDENTIAL_FILL';
   state.credentialsFilled=true;
   await form.locator('input[type=email], input[name=email]').fill(credentials.email);
   await form.locator('input[type=password]').fill(credentials.password);
   const remember=form.locator('input[type=checkbox]');
   if(await remember.count()===1)await remember.check();
+  stage='SUBMIT';
   state.submitArmed=true;
   await form.locator('button[type=submit], input[type=submit]').click({timeout:10000});
   await page.waitForTimeout(500);
@@ -122,6 +130,11 @@ export async function x10Login(engine,d,args,signal) {
    await page.waitForTimeout(500);
   }
   throw fault(state.submitted?'LOGIN_NOT_VERIFIED':'LOGIN_SUBMISSION_BLOCKED');
+ } catch(e) {
+  d.loginDiagnostic={stage,credentialSubmissionObserved:state.submitted,blockedRequests:blocked};
+  engine.save(d);
+  if(/^[A-Z_]+$/.test(e.code||''))throw e;
+  throw fault(e.name==='TimeoutError'?'LOGIN_TIMEOUT_'+stage:'LOGIN_FAILED_'+stage);
  } finally {
   credentials.email='';credentials.password='';
   await context?.close().catch(()=>{});

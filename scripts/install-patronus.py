@@ -17,8 +17,19 @@ for name in ['src','package.json','package-lock.json']:
  p=source/name
  if p.is_dir(): shutil.copytree(p,target/name,dirs_exist_ok=True)
  else: shutil.copy2(p,target/name)
-run('npm','ci','--omit=dev','--no-audit','--no-fund',cwd=target)
-run('npx','playwright','install','--with-deps','chromium',cwd=target,env={**os.environ,'PLAYWRIGHT_BROWSERS_PATH':str(target/'browsers')})
+# Optionally reuse the identical installed runtime without downloading browsers again.
+reuse_revision=sys.argv[3] if len(sys.argv)>3 else None
+if reuse_revision:
+ if len(reuse_revision)!=40 or any(c not in '0123456789abcdef' for c in reuse_revision): raise SystemExit('Exact runtime release required')
+ reuse=pathlib.Path('/srv/patronus/releases')/reuse_revision
+ if (reuse/'package-lock.json').read_bytes()!=(target/'package-lock.json').read_bytes(): raise SystemExit('Runtime lockfile mismatch')
+ for name in ['node_modules','browsers']:
+  prior=(reuse/name).resolve()
+  if not prior.is_dir() or not prior.is_relative_to(pathlib.Path('/srv/patronus/releases')): raise SystemExit('Installed runtime missing')
+  if not (target/name).exists(): (target/name).symlink_to(prior,target_is_directory=True)
+else:
+ run('npm','ci','--omit=dev','--no-audit','--no-fund',cwd=target)
+ run('npx','playwright','install','--with-deps','chromium',cwd=target,env={**os.environ,'PLAYWRIGHT_BROWSERS_PATH':str(target/'browsers')})
 # Installed code and browser binaries are public; runtime profiles remain private.
 for root,dirs,files in os.walk(target):
  os.chmod(root,0o755)
