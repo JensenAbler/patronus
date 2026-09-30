@@ -2,6 +2,7 @@ import { z } from 'zod';
 const obj=x=>z.object(x).strict(), id=z.string().uuid();
 const page={cursor:z.number().int().min(0).default(0),limit:z.number().int().min(1).max(32768).default(16000)};
 export const patronusTools={
+ patronus_login:{method:'login',write:true,schema:obj({account:z.literal('x10'),timeoutSeconds:z.number().int().min(30).max(180).default(90),idempotencyKey:z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)}),title:'Sign into X10 hosting',description:'Sign into the owner-authorized X10 account using privately provisioned credentials. Returns a durable job ID; recover status and result. Credentials and session material are never returned. A visible human challenge is reported, not bypassed. No recurring schedule is owned by Patronus.'},
  patronus_capabilities:{method:'capabilities',schema:obj({}),title:'Inspect Patronus reader',description:'Read Patronus availability, access model, limits and supported retrieval. Runs use preconfigured sessions and never wait for human input.'},
  patronus_start:{method:'start',write:true,schema:obj({
    urls:z.array(z.string().url().max(8192)).min(1).max(10),mode:z.enum(['read','download','explore']).default('read'),

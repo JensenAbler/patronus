@@ -9,6 +9,7 @@ import { request, safeURL, displayURL, fault, startProxy, resolvePublic, agent }
 import { extract } from './extract.js';
 import { browserRequestPolicy, blockedRequest, continueBrowserRequest } from './browser-policy.js';
 import { trackRequests, waitForReadiness } from './readiness.js';
+import { x10Login, X10_LOGIN } from './login.js';
 const terminal=new Set(['succeeded','partial','failed','cancelled']);
 const now=()=>new Date().toISOString();
 const digest=b=>createHash('sha256').update(b).digest('hex');
@@ -27,7 +28,11 @@ export class Patronus {
  save(d){this.db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify(d),d.jobId);}
  get(id){const r=this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);if(!r)throw fault('NOT_FOUND');return {args:JSON.parse(r.input),data:JSON.parse(r.data)};}
  status({jobId}){return this.get(jobId).data;}
- capabilities(){return {name:'Patronus',version:'0.3.0',home:'Alpha',modes:['read','download','explore'],rendering:['http','browser','auto'],inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting, challenge solving or interactive credential requests','Browser permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; other methods/operations blocked','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
+ capabilities(){return {name:'Patronus',version:'0.4.0',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting, challenge solving or interactive credential requests','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
+ login({account,timeoutSeconds=90,idempotencyKey}){
+  if(account!=='x10')throw fault('ACCOUNT_UNSUPPORTED');
+  return this.start({urls:[X10_LOGIN],mode:'login',profile:'x10',timeoutSeconds,idempotencyKey,maxBytes:52428800,maxPages:1});
+ }
  start(args){
   for(const u of args.urls)safeURL(u);
   if(args.resumeJobId){
@@ -207,7 +212,9 @@ export class Patronus {
     const raw=pending.shift();if(seen.has(raw))continue;seen.add(raw);
     try{
      let out;
-     if(args.mode==='download'){
+     if(args.mode==='login'){
+      out=await x10Login(this,d,args,controller.signal);
+     }else if(args.mode==='download'){
       let headers={};
       if(args.profile!=='public'){
        const profile=join(this.root,'profiles',args.profile);

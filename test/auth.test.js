@@ -195,10 +195,14 @@ test('Patronus endpoint publishes discovery aliases and serves MCP only after re
     assert.equal(client.getServerVersion().name, 'Patronus');
     const listed = await client.listTools();
     assert.ok(listed.tools.some((tool) => tool.name === 'patronus_capabilities'));
+    assert.ok(listed.tools.some((tool) => tool.name === 'patronus_login'));
+    const loginJob = await client.callTool({name:'patronus_login',arguments:{account:'x10',idempotencyKey:'mcp-login-fixture-001'}});
+    assert.equal(loginJob.structuredContent.ok,true);
+    assert.equal(loginJob.structuredContent.mode,'login');
     const capabilities = await client.callTool({ name: 'patronus_capabilities', arguments: {} });
     assert.equal(capabilities.structuredContent.ok, true);
     assert.equal(capabilities.structuredContent.name, 'Patronus');
-    assert.equal(listed.tools.length,7);
+    assert.equal(listed.tools.length,8);
     assert.ok(listed.tools.every(tool=>tool.name.startsWith('patronus_')));
     const denied=await client.callTool({name:'patronus_start',arguments:{urls:['http://127.0.0.1/private'],rendering:'http',idempotencyKey:'private-address-denied'}});
     assert.equal(denied.structuredContent.ok,true);
