@@ -13,7 +13,8 @@ Praxis is a development tool and optional compatibility client, not a runtime de
 Node >=22.22.0. Run `npm ci`, then `npm test`.
 `npm start` starts the authenticated MCP gateway; `npm run reader` starts the
 private Unix-socket worker. See [deployment](docs/deployment.md) and
-[reader behavior and evidence](docs/reader.md).
+[reader behavior and evidence](docs/reader.md). Optional [SolveCaptcha](docs/solvecaptcha.md)
+supports reCAPTCHA v2 and standalone Turnstile during browser retrieval and X10 login.
 
 Tools: patronus_capabilities, patronus_start, patronus_status, patronus_jobs,
 patronus_result, patronus_artifact, and patronus_cancel. OAuth scope

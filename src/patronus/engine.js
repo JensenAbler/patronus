@@ -10,6 +10,7 @@ import { extract } from './extract.js';
 import { browserRequestPolicy, blockedRequest, continueBrowserRequest } from './browser-policy.js';
 import { trackRequests, waitForReadiness } from './readiness.js';
 import { x10Login, X10_LOGIN } from './login.js';
+import { captureWidgets, configuredSolver, solvePageChallenge, challengeRequestPolicy } from './challenges.js';
 const terminal=new Set(['succeeded','partial','failed','cancelled']);
 const now=()=>new Date().toISOString();
 const digest=b=>createHash('sha256').update(b).digest('hex');
@@ -28,10 +29,10 @@ export class Patronus {
  save(d){this.db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify(d),d.jobId);}
  get(id){const r=this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);if(!r)throw fault('NOT_FOUND');return {args:JSON.parse(r.input),data:JSON.parse(r.data)};}
  status({jobId}){return this.get(jobId).data;}
- capabilities(){return {name:'Patronus',version:'0.4.0',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting, challenge solving or interactive credential requests','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
- login({account,timeoutSeconds=90,idempotencyKey}){
+ capabilities(){return {name:'Patronus',version:'0.4.0',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2 and standalone Turnstile','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
+ login({account,timeoutSeconds=180,idempotencyKey,solveCaptchas=true}){
   if(account!=='x10')throw fault('ACCOUNT_UNSUPPORTED');
-  return this.start({urls:[X10_LOGIN],mode:'login',profile:'x10',timeoutSeconds,idempotencyKey,maxBytes:52428800,maxPages:1});
+  return this.start({urls:[X10_LOGIN],mode:'login',profile:'x10',timeoutSeconds,idempotencyKey,solveCaptchas,maxBytes:52428800,maxPages:1});
  }
  start(args){
   for(const u of args.urls)safeURL(u);
@@ -131,19 +132,22 @@ export class Patronus {
   if(args.profile!=='public'&&!existsSync(profile))throw fault('PROFILE_MISSING');
   mkdirSync(profile,{recursive:true,mode:0o700});
   let observedBytes=0,context;
+  const challengeState={armed:false};
+  const solver=configuredSolver(this,args);
   const proxy=await startProxy({signal,maxBytes:args.maxBytes-d.bytes,onBytes:n=>{d.bytes+=n-observedBytes;observedBytes=n;}});
   try{
    context=await this.launch({path:profile,config:{channel:'chromium',headless:true,chromiumSandbox:true,proxy:{server:proxy.url,bypass:'<-loopback>'},serviceWorkers:'block',acceptDownloads:false,permissions:[],userAgent:agent,
     args:['--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--disable-background-networking']}});
    if(signal.aborted)throw signal.reason;
    signal.addEventListener('abort',()=>context.close().catch(()=>{}),{once:true});
+   if(solver){solver.apiKey='';await context.addInitScript(captureWidgets);}
    const imported=join(profile,'access.json');
    if(existsSync(imported)){const state=JSON.parse(readFileSync(imported,'utf8'));await context.addCookies(state.cookies||[]);}
    await context.route('**/*',async route=>{
     const req=route.request();
     try{
      if(signal.aborted)throw fault('CANCELLED');
-     const decision=browserRequestPolicy(req);
+     const decision=challengeRequestPolicy(req,challengeState)||browserRequestPolicy(req);
      if(!decision.allowed)throw fault(decision.reason);
      if(!['http:','https:'].includes(new URL(req.url()).protocol))throw fault('URL_POLICY');
      await resolvePublic(req.url());
@@ -157,15 +161,20 @@ export class Patronus {
    page.on('dialog',dialog=>dialog.dismiss());
    page.on('response',r=>{if(d.trace.length<200)d.trace.push({at:now(),url:displayURL(r.url()),status:r.status(),client:agent,route:'browser'});});
    page.on('download',download=>download.cancel());
-   const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:Math.min(60000,args.timeoutSeconds*1000)});
+   let response;
+   page.on('response',r=>{if(r.request().isNavigationRequest()&&r.frame()===page.mainFrame())response=r;});
+   response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:Math.min(60000,args.timeoutSeconds*1000)});
    for(let n=0;n<3;n++){await page.evaluate(()=>window.scrollBy(0,window.innerHeight));await page.waitForTimeout(200);}
-   const readiness=await waitForReadiness(page,tracker,{timeoutMs:(args.browserWaitSeconds??20)*1000,minWaitMs:5000,selector:args.waitForSelector,signal});
+   let readiness=await waitForReadiness(page,tracker,{timeoutMs:(args.browserWaitSeconds??20)*1000,minWaitMs:5000,selector:args.waitForSelector,signal});
+   if(await solvePageChallenge(this,page,d,args,signal,challengeState)) {
+    readiness=await waitForReadiness(page,tracker,{timeoutMs:(args.browserWaitSeconds??20)*1000,minWaitMs:5000,selector:args.waitForSelector,signal});
+   }
    tracker.close();
    if(readiness.outcome==='timeout')d.obstacles.push({code:'PAGE_NOT_SETTLED',url:displayURL(page.url()),message:'Readiness budget expired; captured available content.',...readiness});
    const code=response?.status()||0;
    if(code>=400){await this.browserFailure(page,response,d,args,'HTTP_ERROR');throw fault(code===401?'AUTH_REQUIRED':code===403?'ACCESS_DENIED':code===402?'PAYMENT_REQUIRED':code===429?'RATE_LIMIT':'HTTP_ERROR','HTTP '+code);}
    const html=await page.content(),final=page.url(),out=extract(html,final);
-   if(/^(just a moment|access denied|verify you are human)/i.test(out.title.trim())){await this.browserFailure(page,response,d,args,'CHALLENGE');throw fault('CHALLENGE','The page requires a challenge; no human-input loop is available.');}
+   if(/^(just a moment|access denied|verify you are human)/i.test(out.title.trim())){await this.browserFailure(page,response,d,args,'CHALLENGE');throw fault('CHALLENGE','The challenge remains unresolved; this widget may require unsupported verification.');}
    if(await page.locator('input[type=password]').count())out.coverage.possibleLoginPage=true;
    out.url=displayURL(final);out.route='browser';out.coverage.readiness=readiness;
    out.frames=[];

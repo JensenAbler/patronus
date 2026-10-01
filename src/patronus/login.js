@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { startProxy, resolvePublic, fault, agent } from './network.js';
 import { browserRequestPolicy, continueBrowserRequest } from './browser-policy.js';
 
+import { captureWidgets, configuredSolver, solvePageChallenge, challengeRequestPolicy } from './challenges.js';
+
 export const X10_LOGIN = 'https://x10hosting.com/login';
 const origin = new URL(X10_LOGIN).origin;
 
@@ -17,6 +19,8 @@ export function loginRequestPolicy(req, state) {
    state.submitted = true;
    return {allowed:true,kind:'login'};
   }
+  const challengeDecision=challengeRequestPolicy(req,state.solverState);
+  if(challengeDecision)return challengeDecision;
   if (state.challengeArmed && u.origin === 'https://www.google.com' &&
       /^\/recaptcha\/api2\/(reload|userverify|clear)$/.test(u.pathname)) {
    return {allowed:true,kind:'challenge'};
@@ -46,7 +50,8 @@ export async function x10Login(engine,d,args,signal) {
  mkdirSync(profile,{recursive:true,mode:0o700});
  let context, observedBytes=0, stage='BROWSER_START';
  const blocked={};
- const state={submitArmed:false,submitted:false,challengeArmed:false};
+ const state={submitArmed:false,submitted:false,challengeArmed:false,solverState:{armed:false}};
+ const solver=configuredSolver(engine,args);
  const proxy=await startProxy({signal,maxBytes:args.maxBytes-d.bytes,onBytes:n=>{d.bytes+=n-observedBytes;observedBytes=n;}});
  try {
   context=await engine.launch({path:profile,config:{channel:'chromium',headless:true,chromiumSandbox:true,
@@ -54,6 +59,7 @@ export async function x10Login(engine,d,args,signal) {
    permissions:[],userAgent:agent,args:['--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--disable-background-networking']}});
   if(signal.aborted)throw signal.reason;
   signal.addEventListener('abort',()=>context.close().catch(()=>{}),{once:true});
+  if(solver){solver.apiKey='';await context.addInitScript(captureWidgets);}
   await context.route('**/*',async route=>{
    try {
     if(signal.aborted)throw fault('CANCELLED');
@@ -93,7 +99,7 @@ export async function x10Login(engine,d,args,signal) {
   if(target.href!==X10_LOGIN)throw fault('LOGIN_FORM_CHANGED');
 
   // A normal checkbox interaction can succeed without an image challenge.
-  // No CAPTCHA solver, forged token, alternate IP, or challenge bypass is used.
+  // If normal verification needs help, use the privately configured solver.
   const challenge=page.frames().find(f=>f.url().startsWith('https://www.google.com/recaptcha/api2/anchor'));
   if(challenge) {
    stage='CHALLENGE';
@@ -111,6 +117,9 @@ export async function x10Login(engine,d,args,signal) {
     await page.waitForTimeout(500);
    }
    state.challengeArmed=false;
+   if(!ready&&solver) {
+    ready=await solvePageChallenge(engine,page,d,args,signal,state.solverState,{callbacks:false});
+   }
    if(!ready) {
     verification.anchorChecked=await challenge.locator('#recaptcha-anchor').getAttribute('aria-checked').catch(()=>null);
     verification.frameText=[];
