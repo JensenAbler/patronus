@@ -44,6 +44,18 @@ export function readX10Credentials(root) {
  return value;
 }
 
+export async function locateX10Fields(form) {
+ const candidates=form.locator('input[type=email], input[name=email], input[type=text][name^="x10_username_"]');
+ const visible=[];
+ for(let n=0;n<await candidates.count();n++) {
+  const field=candidates.nth(n);if(await field.isVisible())visible.push(field);
+ }
+ const passwords=form.locator('input[type=password]');
+ if(visible.length!==1||await passwords.count()!==1||!(await passwords.isVisible()))
+  throw fault('LOGIN_FORM_CHANGED');
+ return {identifier:visible[0],password:passwords};
+}
+
 export async function x10Login(engine,d,args,signal) {
  const credentials=readX10Credentials(engine.root);
  const profile=join(engine.root,'profiles','x10');
@@ -97,6 +109,7 @@ export async function x10Login(engine,d,args,signal) {
   const action=await form.getAttribute('action');
   const target=new URL(action||page.url(),page.url());
   if(target.href!==X10_LOGIN)throw fault('LOGIN_FORM_CHANGED');
+  const fields=await locateX10Fields(form);
 
   // A normal checkbox interaction can succeed without an image challenge.
   // If normal verification needs help, use the privately configured solver.
@@ -134,8 +147,8 @@ export async function x10Login(engine,d,args,signal) {
   }
   stage='CREDENTIAL_FILL';
   state.credentialsFilled=true;
-  await form.locator('input[type=email], input[name=email]').fill(credentials.email);
-  await form.locator('input[type=password]').fill(credentials.password);
+  await fields.identifier.fill(credentials.email);
+  await fields.password.fill(credentials.password);
   const remember=form.locator('input[type=checkbox]');
   if(await remember.count()===1)await remember.check();
   stage='SUBMIT';
