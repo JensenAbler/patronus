@@ -10,3 +10,19 @@ Interrupted jobs are never automatically replayed. Recover status before making 
 
 
 Login diagnostics now persist stage timestamps, bounded response status/redirect paths, and blocked-request destinations. Query values, request bodies, cookie values, and sensitive response headers are excluded. Failure evidence includes the final URL, page title, and redacted visible errors. An applied CAPTCHA token is not proof of server acceptance. Diagnostics do not cause additional login submissions or change the existing one-submit policy.
+
+Use sessionOnly=true for a dedicated saved-session check. This does not read
+the account credential file, invoke a solver, fill fields, or submit a form.
+An unsuccessful check returns SESSION_NOT_AUTHENTICATED, not a verified login.
+Authentication evidence records the final path, password-field count, and an
+exact same-origin logout endpoint. Navigation races are retried within the
+existing bounded wait. Both success and failure retain submission timestamps.
+The login form diagnostic records field names/types and CAPTCHA-token presence,
+never field values. A generic /error page is X10_ERROR_PAGE; only an observed
+401, 403, or 429 establishes the corresponding HTTP denial category. After an
+error redirect, one GET to /login checks whether the existing session is
+authenticated; credentials are never resubmitted during this recovery.
+
+Credential POST redirects are fetched without automatic following; only same-origin 302/303 redirects to non-action endpoints are accepted. Redirects that could replay the POST or send credentials to another origin are blocked.
+
+Credential-response HTTP evidence is retained even if its redirect is blocked. Cookie evidence contains only session/remember-cookie presence and session expiry, never cookie values. Portal markers on an HTTP error response do not count as authentication.

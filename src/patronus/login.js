@@ -35,15 +35,52 @@ export function trackLoginResponses(page,record) {
 export const X10_LOGIN = 'https://x10hosting.com/login';
 const origin = new URL(X10_LOGIN).origin;
 
+
+export function classifyX10Error(diagnostic) {
+ const response=[...diagnostic.network].reverse().find(r=>r.navigation&&r.url?.path==='/error');
+ if(response?.status===401)return 'AUTH_REQUIRED';
+ if(response?.status===403)return 'ACCESS_DENIED';
+ if(response?.status===429)return 'RATE_LIMIT';
+ return 'X10_ERROR_PAGE';
+}
+export async function continueX10Request(route,decision,onResponse=()=>{}) {
+ if(decision.kind!=='login')return continueBrowserRequest(route,decision);
+ // Fetch the credential endpoint once without automatically following redirects.
+ const response=await route.fetch({maxRedirects:0,maxRetries:0,timeout:30000});
+ try {
+  const status=response.status();
+  onResponse({kind:'credential-response',at:new Date().toISOString(),method:'POST',status,navigation:true,url:loginEvidenceURL(X10_LOGIN),...(response.headers().location?{redirect:loginEvidenceURL(new URL(response.headers().location,X10_LOGIN).href)}:{})});
+  if(status>=300&&status<400) {
+   if(![302,303].includes(status))throw fault('LOGIN_POST_REDIRECT_POLICY');
+   const location=response.headers().location;
+   const target=new URL(location||'',X10_LOGIN);
+   if(!location||target.origin!==origin||['/logout','/reset'].includes(target.pathname))
+    throw fault('LOGIN_POST_REDIRECT_POLICY');
+  }
+  await route.fulfill({response});
+ }finally{await response.dispose();}
+}
+
+export async function x10AuthenticationEvidence(page) {
+ const u=new URL(page.url());
+ const passwordFields=await page.locator('input[type=password]').count();
+ const logoutTargets=await page.locator('a[href],form[action]').evaluateAll(els=>els.map(e=>e.getAttribute('href')||e.getAttribute('action')).filter(Boolean));
+ const logoutMarker=logoutTargets.some(raw=>{try{const target=new URL(raw,u);return target.origin===origin&&target.pathname.replace(/\/$/,'')==='/logout';}catch{return false;}});
+ return {url:loginEvidenceURL(u.href),passwordFields,logoutMarker,
+  authenticated:u.origin===origin&&!['/login','/error','/reset'].includes(u.pathname.replace(/\/$/,''))&&passwordFields===0&&logoutMarker};
+}
+
 // Login is explicitly authorized for this account, not a general write permission.
 export function loginRequestPolicy(req, state) {
  const u = new URL(req.url());
  if (u.protocol !== 'https:') return {allowed:false,reason:'LOGIN_HTTPS_REQUIRED'};
+ if (state.probeOnly && !['GET','HEAD'].includes(req.method()))return {allowed:false,reason:'SESSION_PROBE_METHOD_POLICY'};
  if (req.method() === 'POST') {
   if (u.origin === origin && u.pathname === '/login' && !u.search &&
       state.submitArmed && !state.submitted && !req.redirectedFrom() &&
       req.frame().url().startsWith(origin + '/')) {
    state.submitted = true;
+   state.submittedAt = new Date().toISOString();
    return {allowed:true,kind:'login'};
   }
   const challengeDecision=challengeRequestPolicy(req,state.solverState);
@@ -98,7 +135,7 @@ export async function locateX10Fields(form) {
 }
 
 export async function x10Login(engine,d,args,signal) {
- const credentials=readX10Credentials(engine.root);
+ const credentials=args.sessionOnly?{email:'',password:''}:readX10Credentials(engine.root);
  const profile=join(engine.root,'profiles','x10');
  mkdirSync(profile,{recursive:true,mode:0o700});
  let context, page, stopTracking, observedBytes=0, stage='BROWSER_START';
@@ -107,8 +144,8 @@ export async function x10Login(engine,d,args,signal) {
  const mark=value=>{stage=value;diagnostic.stage=value;if(diagnostic.timeline.length<30)diagnostic.timeline.push({stage:value,at:new Date().toISOString()});engine.save(d);};
  const record=item=>{if(diagnostic.network.length<100)diagnostic.network.push(item);engine.save(d);};
  const blocked={};
- const state={submitArmed:false,submitted:false,challengeArmed:false,solverState:{armed:false}};
- const solver=configuredSolver(engine,args);
+ const state={submitArmed:false,submitted:false,challengeArmed:false,probeOnly:args.sessionOnly===true,solverState:{armed:false}};
+ const solver=args.sessionOnly?null:configuredSolver(engine,args);
  const proxy=await startProxy({signal,maxBytes:args.maxBytes-d.bytes,onBytes:n=>{d.bytes+=n-observedBytes;observedBytes=n;}});
  try {
   context=await engine.launch({path:profile,config:{channel:'chromium',headless:true,chromiumSandbox:true,
@@ -124,8 +161,8 @@ export async function x10Login(engine,d,args,signal) {
     if(!decision.allowed)throw fault(decision.reason);
     await resolvePublic(req.url());
     engine.budget(d,args);
-    await continueBrowserRequest(route,decision);
-   } catch(e) { const code=/^[A-Z_]+$/.test(e.code||'')?e.code:'REQUEST_FAILED';blocked[code]=(blocked[code]||0)+1;
+    await continueX10Request(route,decision,record);
+   } catch(e) { const code=/^[A-Z][A-Z0-9_]+$/.test(e.code||'')?e.code:'REQUEST_FAILED';blocked[code]=(blocked[code]||0)+1;
     if(diagnostic.blocked.length<50)diagnostic.blocked.push({...blockedRequest(route.request(),code),at:new Date().toISOString(),stage});
     engine.save(d);await route.abort().catch(()=>{}); }
   });
@@ -140,14 +177,31 @@ export async function x10Login(engine,d,args,signal) {
   await page.waitForTimeout(5000);
   if(response?.status()>=400)throw fault(response.status()===403?'ACCESS_DENIED':'HTTP_ERROR');
   const authenticated=async()=>{
-   const u=new URL(page.url());
-   return u.origin===origin && !['/login','/error','/reset'].includes(u.pathname.replace(/\/$/,''))
-    && !(await page.locator('input[type=password]').count())
-    && await page.locator('a[href*="/logout"], form[action*="/logout"]').count()>0;
+   try{diagnostic.authentication=await x10AuthenticationEvidence(page);
+    const lastResponse=[...diagnostic.network].reverse().find(r=>r.navigation);
+    diagnostic.authentication.httpStatus=lastResponse?.status||null;
+    if(lastResponse?.status>=400)diagnostic.authentication.authenticated=false;
+    engine.save(d);return diagnostic.authentication.authenticated;}
+   catch{ return false; } // A redirect may temporarily destroy the execution context.
   };
-  if(await authenticated())return {url:X10_LOGIN,route:'browser',title:'X10 account access',
-   login:{authenticated:true,freshLogin:false,outcome:'EXISTING_SESSION',verifiedAt:new Date().toISOString()},
-   coverage:{scope:'Authenticated portal marker verified; a fresh credential login was not performed.'}};
+  const success=(freshLogin,outcome)=>{
+   mark('VERIFIED');
+   Object.assign(diagnostic,{credentialSubmissionObserved:state.submitted,submittedAt:state.submittedAt||null,
+    blockedRequests:blocked,finishedAt:new Date().toISOString()});
+   engine.save(d);
+   return {url:X10_LOGIN,route:'browser',title:'X10 account access',
+    login:{authenticated:true,freshLogin,outcome,verifiedAt:new Date().toISOString()},
+    coverage:{scope:'Same-origin authenticated account portal and exact logout endpoint verified.'}};
+  };
+  if(await authenticated())return success(false,'EXISTING_SESSION');
+  if(args.sessionOnly) {
+   mark('SESSION_CHECK_COMPLETE');
+   Object.assign(diagnostic,{credentialSubmissionObserved:false,blockedRequests:blocked,finishedAt:new Date().toISOString()});
+   engine.save(d);
+   return {url:X10_LOGIN,route:'browser',title:'X10 session check',
+    login:{authenticated:false,freshLogin:false,outcome:'SESSION_NOT_AUTHENTICATED',verifiedAt:new Date().toISOString()},
+    coverage:{scope:'Existing session checked without reading credentials, solving CAPTCHAs, or submitting forms.'}};
+  }
 
   mark('LOGIN_FORM');
   await page.locator('input[type=password]').waitFor({state:'visible',timeout:15000});
@@ -193,6 +247,8 @@ export async function x10Login(engine,d,args,signal) {
     throw fault(verification.frameText.some(f=>f.imageVisible)?'INTERACTIVE_CHALLENGE_PRESENT':verification.clickOutcome==='timeout'?'VERIFICATION_CHECKBOX_UNAVAILABLE':'VERIFICATION_NOT_COMPLETED');
    }
   }
+  diagnostic.form=await form.evaluate(f=>({method:f.method.toUpperCase(),fields:[...f.elements].map(e=>({type:e.type,name:(e.name||'').replace(/^x10_username_.+$/,'x10_username_*'),disabled:e.disabled,required:e.required})),captchaTokenPresent:Boolean(f.querySelector('[name="g-recaptcha-response"]')?.value)}));
+  engine.save(d);
   mark('IDENTIFIER_FILL');
   state.credentialsFilled=true;
   await fields.identifier.fill(credentials.email);
@@ -211,15 +267,27 @@ export async function x10Login(engine,d,args,signal) {
   await page.waitForTimeout(500);
   const deadline=Date.now()+15000;
   while(Date.now()<deadline&&!signal.aborted) {
-   if(await authenticated())return {url:X10_LOGIN,route:'browser',title:'X10 login',
-    login:{authenticated:true,freshLogin:state.submitted,outcome:'AUTHENTICATED',verifiedAt:new Date().toISOString()},
-    coverage:{scope:'Same-origin authenticated account portal and logout marker verified.'}};
-   if(new URL(page.url()).pathname==='/error')throw fault('ACCESS_DENIED');
+   if(await authenticated())return success(state.submitted,'AUTHENTICATED');
+   if(new URL(page.url()).pathname==='/error') {
+    mark('ERROR_SESSION_CHECK');
+    // One GET checks a possibly established session without resubmitting credentials.
+    diagnostic.errorURL=loginEvidenceURL(page.url());
+    diagnostic.errorTitle=redactLoginText(await page.title(),[credentials.email,credentials.password]);
+    diagnostic.errorMessage=redactLoginText(await page.locator('body').innerText({timeout:2000}),[credentials.email,credentials.password]);
+    const errorCode=classifyX10Error(diagnostic);
+    await page.goto(X10_LOGIN,{waitUntil:'domcontentloaded',timeout:15000});
+    const recoveryDeadline=Math.min(deadline,Date.now()+5000);
+    while(Date.now()<recoveryDeadline&&!signal.aborted) {
+     if(await authenticated())return success(state.submitted,'AUTHENTICATED_AFTER_ERROR');
+     await page.waitForTimeout(250);
+    }
+    throw fault(errorCode);
+   }
    await page.waitForTimeout(500);
   }
   throw fault(state.submitted?'LOGIN_NOT_VERIFIED':'LOGIN_SUBMISSION_BLOCKED');
  } catch(e) {
-  Object.assign(diagnostic,{stage,credentialSubmissionObserved:state.submitted,blockedRequests:blocked,finishedAt:new Date().toISOString()});
+  Object.assign(diagnostic,{stage,credentialSubmissionObserved:state.submitted,submittedAt:state.submittedAt||null,blockedRequests:blocked,finishedAt:new Date().toISOString()});
   if(page) {
    try {
     diagnostic.finalURL=loginEvidenceURL(page.url());
@@ -230,10 +298,16 @@ export async function x10Login(engine,d,args,signal) {
    }catch{diagnostic.pageCapture='unavailable';}
   }
   engine.save(d);
-  if(/^[A-Z_]+$/.test(e.code||''))throw e;
+  if(/^[A-Z][A-Z0-9_]+$/.test(e.code||''))throw e;
   throw fault(e.name==='TimeoutError'?'LOGIN_TIMEOUT_'+stage:'LOGIN_FAILED_'+stage);
  } finally {
   stopTracking?.();
+  if(context)try{
+   const cookies=await context.cookies(X10_LOGIN),session=cookies.find(c=>c.name==='x10hosting_session');
+   diagnostic.sessionCookies={sessionCookiePresent:Boolean(session),rememberCookiePresent:cookies.some(c=>c.name.startsWith('remember_web_')),sessionExpiresAt:session?.expires>0?new Date(session.expires*1000).toISOString():null};
+   engine.save(d);
+  }catch{}
+
   credentials.email='';credentials.password='';
   await context?.close().catch(()=>{});
   proxy.close();
