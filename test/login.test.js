@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, symlinkSync, rmSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Patronus } from '../src/patronus/engine.js';
-import { readX10Credentials, loginRequestPolicy } from '../src/patronus/login.js';
+import { readX10Credentials, loginRequestPolicy, loginEvidenceURL, redactLoginText, trackLoginResponses } from '../src/patronus/login.js';
 
 const req=(url,method='POST',redirect=false)=>({url:()=>url,method:()=>method,
  redirectedFrom:()=>redirect?{}:null,frame:()=>({url:()=> 'https://x10hosting.com/login'}),resourceType:()=> 'document'});
@@ -52,4 +52,19 @@ test('login jobs contain only account references, use idempotency, and fail safe
   assert.deepEqual(JSON.parse(engine.result({jobId:job.jobId}).content),[]);
   assert.equal(engine.get(job.jobId).args.password,undefined);
  }finally{await engine.close();rmSync(root,{recursive:true,force:true});}
+});
+
+
+test('login evidence retains response status and redirect path while excluding secrets',()=>{
+ const events={},records=[],page={on:(name,fn)=>events[name]=fn,off:()=>{},mainFrame:()=>page};
+ const stop=trackLoginResponses(page,r=>records.push(r));
+ events.response({url:()=> 'https://x10hosting.com/login?token=secret',status:()=>302,frame:()=>page,
+  request:()=>({isNavigationRequest:()=>true,method:()=> 'POST'}),
+  headers:()=>({'location':'/error?code=private-code','set-cookie':'secret-session','server':'fixture'})});
+ assert.equal(records[0].status,302);assert.equal(records[0].redirect.path,'/error');
+ assert.deepEqual(records[0].redirect.queryNames,['code']);
+ assert.ok(!JSON.stringify(records).includes('private-code'));assert.ok(!JSON.stringify(records).includes('secret-session'));
+ assert.deepEqual(loginEvidenceURL('https://x10hosting.com/error?email=private&code=secret').queryNames,['email','code']);
+ assert.equal(redactLoginText('wrong secret-password for private@example.test',['secret-password']),'wrong [redacted] for [redacted email]');
+ assert.ok(!redactLoginText('a'.repeat(100)).includes('a'.repeat(100)));stop();
 });

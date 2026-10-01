@@ -1,9 +1,36 @@
 import { readFileSync, lstatSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { startProxy, resolvePublic, fault, agent } from './network.js';
-import { browserRequestPolicy, continueBrowserRequest } from './browser-policy.js';
+import { browserRequestPolicy, continueBrowserRequest, blockedRequest } from './browser-policy.js';
 
 import { captureWidgets, configuredSolver, solvePageChallenge, challengeRequestPolicy } from './challenges.js';
+
+// Diagnostic URLs never contain query values, cookie values, or form bodies.
+export function loginEvidenceURL(raw) {
+ try {const u=new URL(raw);return {origin:u.origin,path:u.pathname,queryNames:[...new Set(u.searchParams.keys())]};}
+ catch{return {origin:'[invalid URL]',path:'',queryNames:[]};}
+}
+export function redactLoginText(raw,secrets=[]) {
+ let text=String(raw);
+ for(const secret of secrets.filter(v=>typeof v==='string'&&v.length))text=text.split(secret).join('[redacted]');
+ return text.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[redacted email]')
+  .replace(/[A-Za-z0-9._~+\/-]{64,}/g,'[redacted token]').slice(0,5000);
+}
+export function trackLoginResponses(page,record) {
+ const response=r=>{
+  try {
+   const req=r.request(),navigation=req.isNavigationRequest()&&r.frame()===page.mainFrame();
+   const url=loginEvidenceURL(r.url());
+   if(!navigation&&url.origin!=='https://x10hosting.com')return;
+   const h=r.headers();
+   record({kind:'response',at:new Date().toISOString(),method:req.method(),status:r.status(),navigation,url,
+    ...(h.location?{redirect:loginEvidenceURL(new URL(h.location,r.url()).href)}:{}),
+    headers:Object.fromEntries(['server','content-type','cf-mitigated','retry-after'].filter(k=>h[k]).map(k=>[k,h[k].slice(0,200)]))});
+  }catch{}
+ };
+ page.on('response',response);
+ return ()=>page.off('response',response);
+}
 
 export const X10_LOGIN = 'https://x10hosting.com/login';
 const origin = new URL(X10_LOGIN).origin;
@@ -74,7 +101,11 @@ export async function x10Login(engine,d,args,signal) {
  const credentials=readX10Credentials(engine.root);
  const profile=join(engine.root,'profiles','x10');
  mkdirSync(profile,{recursive:true,mode:0o700});
- let context, observedBytes=0, stage='BROWSER_START';
+ let context, page, stopTracking, observedBytes=0, stage='BROWSER_START';
+ const diagnostic={stage,timeline:[{stage,at:new Date().toISOString()}],network:[],blocked:[]};
+ d.loginDiagnostic=diagnostic;
+ const mark=value=>{stage=value;diagnostic.stage=value;if(diagnostic.timeline.length<30)diagnostic.timeline.push({stage:value,at:new Date().toISOString()});engine.save(d);};
+ const record=item=>{if(diagnostic.network.length<100)diagnostic.network.push(item);engine.save(d);};
  const blocked={};
  const state={submitArmed:false,submitted:false,challengeArmed:false,solverState:{armed:false}};
  const solver=configuredSolver(engine,args);
@@ -94,15 +125,18 @@ export async function x10Login(engine,d,args,signal) {
     await resolvePublic(req.url());
     engine.budget(d,args);
     await continueBrowserRequest(route,decision);
-   } catch(e) { const code=/^[A-Z_]+$/.test(e.code||'')?e.code:'REQUEST_FAILED';blocked[code]=(blocked[code]||0)+1;await route.abort().catch(()=>{}); }
+   } catch(e) { const code=/^[A-Z_]+$/.test(e.code||'')?e.code:'REQUEST_FAILED';blocked[code]=(blocked[code]||0)+1;
+    if(diagnostic.blocked.length<50)diagnostic.blocked.push({...blockedRequest(route.request(),code),at:new Date().toISOString(),stage});
+    engine.save(d);await route.abort().catch(()=>{}); }
   });
   await context.routeWebSocket('**/*',ws=>ws.close());
-  const page=context.pages()[0]||await context.newPage();
+  page=context.pages()[0]||await context.newPage();
+  stopTracking=trackLoginResponses(page,record);
   page.on('dialog',dialog=>dialog.dismiss());
   page.on('download',download=>download.cancel());
-  stage='NAVIGATION';
+  mark('NAVIGATION');
   const response=await page.goto(X10_LOGIN,{waitUntil:'commit',timeout:30000});
-  stage='PAGE_READY';
+  mark('PAGE_READY');
   await page.waitForTimeout(5000);
   if(response?.status()>=400)throw fault(response.status()===403?'ACCESS_DENIED':'HTTP_ERROR');
   const authenticated=async()=>{
@@ -115,7 +149,7 @@ export async function x10Login(engine,d,args,signal) {
    login:{authenticated:true,freshLogin:false,outcome:'EXISTING_SESSION',verifiedAt:new Date().toISOString()},
    coverage:{scope:'Authenticated portal marker verified; a fresh credential login was not performed.'}};
 
-  stage='LOGIN_FORM';
+  mark('LOGIN_FORM');
   await page.locator('input[type=password]').waitFor({state:'visible',timeout:15000});
   if(new URL(page.url()).origin!==origin)throw fault('LOGIN_ORIGIN_MISMATCH');
   const form=page.locator('form').filter({has:page.locator('input[type=password]')});
@@ -129,7 +163,7 @@ export async function x10Login(engine,d,args,signal) {
   // If normal verification needs help, use the privately configured solver.
   const challenge=page.frames().find(f=>f.url().startsWith('https://www.google.com/recaptcha/api2/anchor'));
   if(challenge) {
-   stage='CHALLENGE';
+   mark('CHALLENGE');
    state.challengeArmed=true;
    const verification={clickOutcome:'pending'};
    await challenge.locator('#recaptcha-anchor').click({timeout:5000})
@@ -159,14 +193,14 @@ export async function x10Login(engine,d,args,signal) {
     throw fault(verification.frameText.some(f=>f.imageVisible)?'INTERACTIVE_CHALLENGE_PRESENT':verification.clickOutcome==='timeout'?'VERIFICATION_CHECKBOX_UNAVAILABLE':'VERIFICATION_NOT_COMPLETED');
    }
   }
-  stage='IDENTIFIER_FILL';
+  mark('IDENTIFIER_FILL');
   state.credentialsFilled=true;
   await fields.identifier.fill(credentials.email);
-  stage='PASSWORD_FILL';
+  mark('PASSWORD_FILL');
   await fields.password.fill(credentials.password);
-  stage='REMEMBER_ME';
+  mark('REMEMBER_ME');
   await setX10Remember(form);
-  stage='SUBMIT';
+  mark('SUBMIT');
   state.submitArmed=true;
   // requestSubmit retains native validation and submit handlers even when an
   // already-solved CAPTCHA popup obscures the submit button.
@@ -185,11 +219,21 @@ export async function x10Login(engine,d,args,signal) {
   }
   throw fault(state.submitted?'LOGIN_NOT_VERIFIED':'LOGIN_SUBMISSION_BLOCKED');
  } catch(e) {
-  d.loginDiagnostic={stage,credentialSubmissionObserved:state.submitted,blockedRequests:blocked};
+  Object.assign(diagnostic,{stage,credentialSubmissionObserved:state.submitted,blockedRequests:blocked,finishedAt:new Date().toISOString()});
+  if(page) {
+   try {
+    diagnostic.finalURL=loginEvidenceURL(page.url());
+    diagnostic.title=redactLoginText(await page.title(),[credentials.email,credentials.password]);
+    const tokens=await page.locator('[name="g-recaptcha-response"],[name="h-captcha-response"],[name="cf-turnstile-response"]').evaluateAll(els=>els.map(e=>e.value).filter(Boolean));
+    const selector=new URL(page.url()).pathname==='/error'?'body':'[role="alert"],.alert,.invalid-feedback';
+    diagnostic.visibleMessage=redactLoginText(await page.locator(selector).allTextContents().then(t=>t.join('\n')),[credentials.email,credentials.password,...tokens]);
+   }catch{diagnostic.pageCapture='unavailable';}
+  }
   engine.save(d);
   if(/^[A-Z_]+$/.test(e.code||''))throw e;
   throw fault(e.name==='TimeoutError'?'LOGIN_TIMEOUT_'+stage:'LOGIN_FAILED_'+stage);
  } finally {
+  stopTracking?.();
   credentials.email='';credentials.password='';
   await context?.close().catch(()=>{});
   proxy.close();
