@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, symlinkSync, rmSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Patronus } from '../src/patronus/engine.js';
-import { readX10Credentials, loginRequestPolicy, loginEvidenceURL, redactLoginText, trackLoginResponses, x10AuthenticationEvidence, classifyX10Error, continueX10Request } from '../src/patronus/login.js';
+import { readX10Credentials, loginRequestPolicy, loginEvidenceURL, redactLoginText, trackLoginResponses, x10AuthenticationEvidence, classifyX10Error, continueX10Request, diagnoseX10Error } from '../src/patronus/login.js';
 
 const req=(url,method='POST',redirect=false)=>({url:()=>url,method:()=>method,
  redirectedFrom:()=>redirect?{}:null,frame:()=>({url:()=> 'https://x10hosting.com/login'}),resourceType:()=> 'document'});
@@ -115,7 +115,7 @@ test('session probe blocks even an armed login POST',()=>{
 });
 
 test('browser login error recovery checks the session and never replays the credential POST',{skip:!process.env.PATRONUS_TEST_CHROMIUM},async()=>{
- for(const recover of [true,false]) {
+ for(const recover of [true,false,'blocked']) {
   const root=mkdtempSync(join(tmpdir(),'patronus-error-recovery-'));
   let posts=0,checks=0;
   const engine=new Patronus(root,{launch:async({path,config})=>{
@@ -128,9 +128,9 @@ test('browser login error recovery checks the session and never replays the cred
     continue:async()=>{
      const req=r.request(),u=new URL(req.url());
      if(req.method()==='POST'){posts++;return r.fulfill({status:200,contentType:'text/html',body:"<script>location.replace('/error')</script>"});}
-     if(u.pathname==='/login'&&posts){checks++;if(recover)return r.fulfill({status:200,contentType:'text/html',body:"<script>location.replace('/account')</script>"});}
+     if(u.pathname==='/login'&&posts){checks++;if(recover===true)return r.fulfill({status:200,contentType:'text/html',body:"<script>location.replace('/account')</script>"});}
      const body=u.pathname==='/account'?'<a href="/logout">Log out</a>':
-      u.pathname==='/error'?'<title>Unknown Error</title><p>Unknown Error</p>':
+      u.pathname==='/error'?(recover==='blocked'?'<h1>Browser Blocklisted</h1><p>This browser is blocked.</p><p>Please wait 24 hours. Your error code is EDAD2D404A932AEB9.</p>':'<title>Unknown Error</title><p>Unknown Error</p>'):
       '<form method="POST" action="/login"><input type="email" name="email"><input type="password" name="password"><button>Login</button></form>';
      return r.fulfill({status:200,contentType:'text/html',body});
     }
@@ -143,16 +143,17 @@ test('browser login error recovery checks the session and never replays the cred
    const job=engine.login({account:'x10',solveCaptchas:false,idempotencyKey:'error-session-fixture',timeoutSeconds:60});
    await engine.tick();
    const done=engine.status({jobId:job.jobId});
-   assert.equal(posts,1);assert.equal(checks,1);
+   assert.equal(posts,1);assert.equal(checks,recover==='blocked'?0:1);
    assert.equal(done.loginDiagnostic.credentialSubmissionObserved,true);
    assert.ok(done.loginDiagnostic.submittedAt);
-   if(recover) {
+   if(recover===true) {
     assert.equal(done.state,'succeeded',JSON.stringify(done));
     const result=JSON.parse(engine.result({jobId:job.jobId}).content)[0];
     assert.equal(result.login.outcome,'AUTHENTICATED_AFTER_ERROR');
     assert.equal(result.login.freshLogin,true);
    }else{
-    assert.equal(done.state,'failed');assert.equal(done.obstacles[0].code,'X10_ERROR_PAGE');
+    assert.equal(done.state,'failed');assert.equal(done.obstacles[0].code,recover==='blocked'?'X10_BROWSER_BLOCKLISTED':'X10_ERROR_PAGE');
+    if(recover==='blocked'){assert.equal(done.loginDiagnostic.serverDiagnosis.supportCode,'EDAD2D404A932AEB9');assert.equal(done.loginDiagnostic.serverDiagnosis.requiresProviderReview,true);}
    }
    assert.ok(!JSON.stringify(done).includes('private-fixture-password'));
    assert.ok(!JSON.stringify(done).includes('fixture@example.test'));
@@ -169,4 +170,15 @@ test('credential POST fetch never follows redirects or permits replay and cross-
   else await assert.rejects(continueX10Request(route,{kind:'login'}),{code:'LOGIN_POST_REDIRECT_POLICY'});
   assert.equal(calls,1);assert.equal(disposed,true);assert.equal(fulfilled,allowed);
  }
+});
+
+test('specific provider block feedback is structured without treating generic lists as diagnoses',()=>{
+ const specific=diagnoseX10Error('Home\nBrowser Blocklisted\nThis browser is blocked.\nPlease wait 24 hours. Your error code is EDAD2D404A932AEB9.');
+ assert.equal(specific.category,'X10_BROWSER_BLOCKLISTED');
+ assert.equal(specific.supportCode,'EDAD2D404A932AEB9');
+ assert.equal(specific.minimumWaitSeconds,86400);
+ assert.equal(specific.requiresProviderReview,true);
+ const generic=diagnoseX10Error('Unknown Error\ncommon error conditions\nBrowser Blocklisted\nIP Blocklisted\nYour error code is unknown.');
+ assert.equal(generic.specific,false);assert.equal(generic.category,'X10_ERROR_PAGE');assert.equal(generic.supportCode,null);
+ assert.equal(classifyX10Error({network:[],serverDiagnosis:specific}),'X10_BROWSER_BLOCKLISTED');
 });

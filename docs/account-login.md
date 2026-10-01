@@ -26,3 +26,11 @@ authenticated; credentials are never resubmitted during this recovery.
 Credential POST redirects are fetched without automatic following; only same-origin 302/303 redirects to non-action endpoints are accepted. Redirects that could replay the POST or send credentials to another origin are blocked.
 
 Credential-response HTTP evidence is retained even if its redirect is blocked. Cookie evidence contains only session/remember-cookie presence and session expiry, never cookie values. Portal markers on an HTTP error response do not count as authentication.
+
+Specific X10 error-page feedback is stored in serverDiagnosis, including a bounded
+support code, category, stated minimum wait, and whether provider review is needed.
+The generic Unknown Error page's list of possible causes is never treated as a
+specific diagnosis. Explicit browser/IP/network/country block pages stop the worker
+without another navigation or credential submission. Diagnostics also distinguish
+request-policy blocks that occurred before the credential response from later
+asset blocks. No browser identity or network changes are made to bypass a block.

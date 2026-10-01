@@ -36,7 +36,23 @@ export const X10_LOGIN = 'https://x10hosting.com/login';
 const origin = new URL(X10_LOGIN).origin;
 
 
+export function diagnoseX10Error(text) {
+ const supportCode=String(text).match(/Your error code is\s+([A-F0-9]{8,32})\b/i)?.[1]?.toUpperCase()||null;
+ // A generic error page lists every possible cause. Those are not diagnoses.
+ const generic=/Unknown Error|common error conditions/i.test(text);
+ const categories=[['Browser Blocklisted','X10_BROWSER_BLOCKLISTED'],
+  ['IP Blocklisted','X10_IP_BLOCKLISTED'],['Network Blocklisted','X10_NETWORK_BLOCKLISTED'],
+  ['Country Code Blocklisted','X10_COUNTRY_BLOCKLISTED'],['Failed Logins','X10_FAILED_LOGINS'],
+  ['Automated Activity','X10_AUTOMATED_ACTIVITY']];
+ const matches=categories.filter(([label])=>String(text).split('\n').some(line=>line.trim()===label));
+ const specific=!generic&&matches.length===1;
+ return {source:'x10-error-page',category:specific?matches[0][1]:'X10_ERROR_PAGE',
+  supportCode,specific,minimumWaitSeconds:/wait(?:ing)?\s+24 hours/i.test(text)?86400:null,
+  requiresProviderReview:specific&&matches[0][1].endsWith('BLOCKLISTED')};
+}
+
 export function classifyX10Error(diagnostic) {
+ if(diagnostic.serverDiagnosis?.specific)return diagnostic.serverDiagnosis.category;
  const response=[...diagnostic.network].reverse().find(r=>r.navigation&&r.url?.path==='/error');
  if(response?.status===401)return 'AUTH_REQUIRED';
  if(response?.status===403)return 'ACCESS_DENIED';
@@ -274,7 +290,14 @@ export async function x10Login(engine,d,args,signal) {
     diagnostic.errorURL=loginEvidenceURL(page.url());
     diagnostic.errorTitle=redactLoginText(await page.title(),[credentials.email,credentials.password]);
     diagnostic.errorMessage=redactLoginText(await page.locator('body').innerText({timeout:2000}),[credentials.email,credentials.password]);
+    diagnostic.serverDiagnosis=diagnoseX10Error(diagnostic.errorMessage);
+    const credentialResponse=diagnostic.network.find(r=>r.kind==='credential-response');
+    diagnostic.serverDiagnosis.credentialResponseObserved=Boolean(credentialResponse);
+    diagnostic.serverDiagnosis.blockedBeforeCredentialResponse=credentialResponse?diagnostic.blocked.filter(r=>r.at<credentialResponse.at).length:null;
+    engine.save(d);
     const errorCode=classifyX10Error(diagnostic);
+    // A definite provider block is not a transient rendering failure.
+    if(diagnostic.serverDiagnosis.requiresProviderReview)throw fault(errorCode);
     await page.goto(X10_LOGIN,{waitUntil:'domcontentloaded',timeout:15000});
     const recoveryDeadline=Math.min(deadline,Date.now()+5000);
     while(Date.now()<recoveryDeadline&&!signal.aborted) {
