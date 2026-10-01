@@ -52,7 +52,8 @@ export async function setX10Remember(form) {
   const label=form.locator('label[for="remember"]');
   if(await checkbox.getAttribute('id')!=='remember'||await label.count()!==1||!(await label.isVisible()))
    throw fault('LOGIN_REMEMBER_UNAVAILABLE');
-  await label.click({timeout:5000});
+  // A solved reCAPTCHA panel may still intercept physical pointer events.
+  await label.evaluate(el=>el.click());
  }
  if(!(await checkbox.isChecked()))throw fault('LOGIN_REMEMBER_UNAVAILABLE');
 }
@@ -167,7 +168,12 @@ export async function x10Login(engine,d,args,signal) {
   await setX10Remember(form);
   stage='SUBMIT';
   state.submitArmed=true;
-  await form.locator('button[type=submit], input[type=submit]').click({timeout:10000});
+  // requestSubmit retains native validation and submit handlers even when an
+  // already-solved CAPTCHA popup obscures the submit button.
+  await form.evaluate(f=>{
+   if(f.action!=='https://x10hosting.com/login'||f.method.toLowerCase()!=='post')throw new Error('LOGIN_FORM_CHANGED');
+   f.requestSubmit();
+  });
   await page.waitForTimeout(500);
   const deadline=Date.now()+15000;
   while(Date.now()<deadline&&!signal.aborted) {
