@@ -244,7 +244,7 @@ test('real browser follows consent redirect and completes authenticated MCP', { 
   const client = new Client({ name: 'browser-regression', version: '1.0.0' });
   try {
     await client.connect(new StreamableHTTPClientTransport(new URL(f.resource), { requestInit: { headers: { Authorization: 'Bearer ' + token.access_token } } }));
-    assert.equal((await client.listTools()).tools.length, 7);
+    assert.equal((await client.listTools()).tools.length, 8);
     assert.equal((await client.callTool({ name: 'patronus_capabilities', arguments: {} })).structuredContent.ok, true);
   } finally { await client.close(); }
 });

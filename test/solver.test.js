@@ -66,6 +66,7 @@ test('standalone Turnstile maps its site key; unsupported managed challenges sub
 
 function pageFixture(html) {
  const {window}=parseHTML(html);
+ Object.defineProperty(window,'__patronusWidgets',{value:[],configurable:true});
  window.location={href:challenge.pageurl};
  const context=vm.createContext({window,document:window.document,location:window.location,URL,Event:window.Event,Set});
  return {window,page:{evaluate:async(fn,arg)=>{context.arg=arg;return vm.runInContext('('+fn.toString()+')(arg)',context);}}};
@@ -126,4 +127,35 @@ test('restart preserves solver receipts and job id; a repeated request does not 
   assert.equal(engine.start(args).jobId,d.jobId);
   const status=engine.status({jobId:d.jobId});assert.equal(status.state,'failed');assert.equal(status.solverAttempts[0].taskId,'123');
  }finally{await engine.close();rmSync(root,{recursive:true,force:true});}
+});
+
+test('image and hCaptcha requests map provider parameters and accept type-specific answers',async()=>{
+ for(const [ch,answer,method] of [
+  [{...challenge,type:'image',body:Buffer.from('png').toString('base64')},'aB7x','base64'],
+  [{...challenge,type:'hcaptcha'},token,'hcaptcha']]) {
+  const records=[];
+  assert.equal(await solveToken({config,challenge:ch,signal,wait:async ms=>assert.equal(ms,5000),record:r=>records.push(r),
+   transport:async(path,p)=>{if(path==='/in.php'){assert.equal(p.method,method);if(ch.type==='image')assert.equal(p.body,ch.body);else assert.equal(p.sitekey,ch.sitekey);return {status:1,request:'123'};}return {status:1,request:answer};}}),answer);
+  assert.ok(!JSON.stringify(records).includes(answer));
+ }
+ await assert.rejects(solveToken({config,challenge:{...challenge,type:'image',body:'!bad'},signal,record:()=>{},transport:async()=>assert.fail()}),{code:'SOLVER_CHALLENGE_UNSUPPORTED'});
+});
+test('hCaptcha fills both compatibility fields and invokes its callback once',async()=>{
+ const {page,window}=pageFixture('<div class="h-captcha" data-sitekey="fixture-sitekey" data-callback="done"></div><textarea name="h-captcha-response"></textarea><textarea name="g-recaptcha-response"></textarea>');
+ let calls=0;window.done=()=>calls++;
+ const detected=await detectChallenge(page);assert.equal(detected.type,'hcaptcha');
+ assert.equal(await applyToken(page,detected,token),true);assert.equal(calls,1);
+ for(const field of window.document.querySelectorAll('textarea'))assert.equal(field.value,token);
+ assert.equal(await detectChallenge(page),null);
+});
+test('image detection associates one nearby challenge with one empty captcha field',async()=>{
+ const {page}=pageFixture('<div><img src="https://example.com/captcha.png" alt="Captcha"><label>Captcha</label><input id="captcha" name="captcha" type="text"></div>');
+ const ch=await detectChallenge(page);assert.equal(ch.type,'image');assert.equal(ch.inputIndex,0);assert.equal(ch.imageIndex,0);
+ for(const html of [
+  '<div><img src="/logo.svg" alt="Captcha logo"><input name="captcha"></div>',
+  '<div><img src="/captcha.png" alt="Captcha"><input name="password" type="password"></div>',
+  '<div><img src="/captcha.png" alt="Captcha"><input name="captcha"><input name="captcha2"></div>',
+  '<div><img src="/captcha.png" alt="Captcha"><img src="/captcha2.png" alt="Captcha"><input name="captcha"></div>']) {
+  const fixture=pageFixture(html);assert.equal(await detectChallenge(fixture.page),null);
+ }
 });

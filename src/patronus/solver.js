@@ -5,7 +5,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { resolvePublic, safeURL, fault } from './network.js';
 
 const endpoint='https://api.solvecaptcha.com';
-const knownErrors=new Set(['ERROR_WRONG_USER_KEY','ERROR_KEY_DOES_NOT_EXIST','ERROR_ZERO_BALANCE','ERROR_NO_SLOT_AVAILABLE','ERROR_CAPTCHA_UNSOLVABLE','ERROR_WRONG_CAPTCHA_ID','ERROR_BAD_PARAMETERS','ERROR_BAD_TOKEN_OR_PAGEURL','ERROR_IP_NOT_ALLOWED']);
+const knownErrors=new Set(['ERROR_WRONG_USER_KEY','ERROR_KEY_DOES_NOT_EXIST','ERROR_ZERO_BALANCE','ERROR_NO_SLOT_AVAILABLE','ERROR_CAPTCHA_UNSOLVABLE','ERROR_WRONG_CAPTCHA_ID','ERROR_BAD_PARAMETERS','ERROR_BAD_TOKEN_OR_PAGEURL','ERROR_IP_NOT_ALLOWED','ERROR_METHOD_NOT_SUPPORTED','ERROR_BAD_METHOD','ERROR_TOO_BIG_CAPTCHA_FILESIZE','ERROR_IMAGE_TYPE_NOT_SUPPORTED']);
 export function readSolverConfig(root) {
  let fd;
  try { fd=openSync(join(root,'solvecaptcha.json'),constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK); }
@@ -42,14 +42,16 @@ export async function solverTransport(path,params,signal) {
  });
 }
 
-export async function solveToken({config,challenge,signal,record,transport=solverTransport,wait=(ms,s)=>sleep(ms,undefined,{signal:s}),maxPolls=24}) {
+export async function solveToken({config,challenge,signal,record,transport=solverTransport,wait=(ms,s)=>sleep(ms,undefined,{signal:s}),maxPolls=challenge.type==='hcaptcha'?48:24}) {
  const u=safeURL(challenge.pageurl);
- if(u.protocol!=='https:'||!['recaptcha-v2','turnstile'].includes(challenge.type)||
-    typeof challenge.sitekey!=='string'||!/^[A-Za-z0-9_-]{10,256}$/.test(challenge.sitekey))
+ if(u.protocol!=='https:'||!['recaptcha-v2','turnstile','hcaptcha','image'].includes(challenge.type)||
+    (challenge.type==='image' ? typeof challenge.body!=='string'||challenge.body.length>1398104||! /^[A-Za-z0-9+/]+={0,2}$/.test(challenge.body) :
+     typeof challenge.sitekey!=='string'||!/^[A-Za-z0-9_-]{10,256}$/.test(challenge.sitekey)))
   throw fault('SOLVER_CHALLENGE_UNSUPPORTED');
  const params={key:config.apiKey,pageurl:u.href};
  if(challenge.type==='recaptcha-v2')Object.assign(params,{method:'userrecaptcha',googlekey:challenge.sitekey,version:'v2',invisible:challenge.invisible?'1':'0'});
- else Object.assign(params,{method:'turnstile',sitekey:challenge.sitekey});
+ else if(challenge.type==='image')Object.assign(params,{method:'base64',body:challenge.body});
+ else Object.assign(params,{method:challenge.type==='hcaptcha'?'hcaptcha':'turnstile',sitekey:challenge.sitekey});
  // Managed Cloudflare challenges require browser identity matching and are not
  // treated as ordinary widgets. Do not submit incomplete challenge parameters.
  if(challenge.managed)throw fault('SOLVER_CHALLENGE_UNSUPPORTED');
@@ -67,7 +69,7 @@ export async function solveToken({config,challenge,signal,record,transport=solve
   if(signal?.aborted)throw signal.reason;
   const result=await call('/res.php',{key:config.apiKey,action:'get',id:task.request});
   if(result?.status===1) {
-   if(typeof result.request!=='string'||! /^[A-Za-z0-9._~-]{20,32768}$/.test(result.request))throw fault('SOLVER_RESPONSE_INVALID');
+   if(typeof result.request!=='string'||!(challenge.type==='image'?/^[^\x00-\x1f\x7f]{1,256}$/:/^[A-Za-z0-9._~-]{20,32768}$/).test(result.request))throw fault('SOLVER_RESPONSE_INVALID');
    record({state:'solved',taskId:task.request,type:challenge.type});
    return result.request;
   }
