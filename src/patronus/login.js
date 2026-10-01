@@ -150,6 +150,12 @@ export async function locateX10Fields(form) {
  return {identifier:visible[0],password:passwords};
 }
 
+export async function maskedLoginScreenshot(page) {
+ // Never capture identifier, password, hidden verification fields or editable values.
+ return page.screenshot({fullPage:false,timeout:5000,animations:'disabled',caret:'hide',
+  mask:[page.locator('input,textarea,[contenteditable]')],maskColor:'#65727f'});
+}
+
 export async function x10Login(engine,d,args,signal) {
  const credentials=args.sessionOnly?{email:'',password:''}:readX10Credentials(engine.root);
  const profile=join(engine.root,'profiles','x10');
@@ -159,14 +165,25 @@ export async function x10Login(engine,d,args,signal) {
  d.loginDiagnostic=diagnostic;
  const mark=value=>{stage=value;diagnostic.stage=value;if(diagnostic.timeline.length<30)diagnostic.timeline.push({stage:value,at:new Date().toISOString()});engine.save(d);};
  const record=item=>{if(diagnostic.network.length<100)diagnostic.network.push(item);engine.save(d);};
+ const capture=async label=>{
+  if(!args.screenshots||!page)return;
+  const item={stage:label,at:new Date().toISOString()};
+  (diagnostic.screenshots??=[]).push(item);
+  try {
+   const image=await maskedLoginScreenshot(page);
+   if(image.length>2097152)throw fault('DIAGNOSTIC_LIMIT');
+   item.artifactId=engine.diagnosticArtifact(d,args,'login-'+label.toLowerCase()+'.png','image/png',image);
+  }catch {item.error='SCREENSHOT_UNAVAILABLE';}
+  engine.save(d);
+ };
  const blocked={};
  const state={submitArmed:false,submitted:false,challengeArmed:false,probeOnly:args.sessionOnly===true,solverState:{armed:false}};
  const solver=args.sessionOnly?null:configuredSolver(engine,args);
  const proxy=await startProxy({signal,maxBytes:args.maxBytes-d.bytes,onBytes:n=>{d.bytes+=n-observedBytes;observedBytes=n;}});
  try {
-  context=await engine.launch({path:profile,config:{channel:'chromium',headless:true,chromiumSandbox:true,
+  context=await engine.launch({path:profile,config:{channel:'chromium',headless:!args.headed,chromiumSandbox:true,
    proxy:{server:proxy.url,bypass:'<-loopback>'},serviceWorkers:'block',acceptDownloads:false,
-   permissions:[],userAgent:agent,args:['--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--disable-background-networking']}});
+   permissions:[],userAgent:agent,...(args.headed?{viewport:{width:1100,height:900}}:{}),args:[...(args.headed?['--disable-gpu']:[]),'--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--disable-background-networking']}});
   if(signal.aborted)throw signal.reason;
   signal.addEventListener('abort',()=>context.close().catch(()=>{}),{once:true});
   if(solver){solver.apiKey='';await context.addInitScript(captureWidgets);}
@@ -191,6 +208,7 @@ export async function x10Login(engine,d,args,signal) {
   const response=await page.goto(X10_LOGIN,{waitUntil:'commit',timeout:30000});
   mark('PAGE_READY');
   await page.waitForTimeout(5000);
+  await capture('PAGE_READY');
   if(response?.status()>=400)throw fault(response.status()===403?'ACCESS_DENIED':'HTTP_ERROR');
   const authenticated=async()=>{
    try{diagnostic.authentication=await x10AuthenticationEvidence(page);
@@ -209,7 +227,7 @@ export async function x10Login(engine,d,args,signal) {
     login:{authenticated:true,freshLogin,outcome,verifiedAt:new Date().toISOString()},
     coverage:{scope:'Same-origin authenticated account portal and exact logout endpoint verified.'}};
   };
-  if(await authenticated())return success(false,'EXISTING_SESSION');
+  if(await authenticated()){await capture('EXISTING_SESSION');return success(false,'EXISTING_SESSION');}
   if(args.sessionOnly) {
    mark('SESSION_CHECK_COMPLETE');
    Object.assign(diagnostic,{credentialSubmissionObserved:false,blockedRequests:blocked,finishedAt:new Date().toISOString()});
@@ -228,6 +246,7 @@ export async function x10Login(engine,d,args,signal) {
   const target=new URL(action||page.url(),page.url());
   if(target.href!==X10_LOGIN)throw fault('LOGIN_FORM_CHANGED');
   const fields=await locateX10Fields(form);
+  await capture('LOGIN_FORM');
 
   // A normal checkbox interaction can succeed without an image challenge.
   // If normal verification needs help, use the privately configured solver.
@@ -248,6 +267,7 @@ export async function x10Login(engine,d,args,signal) {
     await page.waitForTimeout(500);
    }
    state.challengeArmed=false;
+   await capture('CHECKBOX_RESULT');
    if(!ready&&solver) {
     ready=await solvePageChallenge(engine,page,d,args,signal,state.solverState,{callbacks:false});
    }
@@ -263,6 +283,7 @@ export async function x10Login(engine,d,args,signal) {
     throw fault(verification.frameText.some(f=>f.imageVisible)?'INTERACTIVE_CHALLENGE_PRESENT':verification.clickOutcome==='timeout'?'VERIFICATION_CHECKBOX_UNAVAILABLE':'VERIFICATION_NOT_COMPLETED');
    }
   }
+  await capture('CAPTCHA_READY');
   diagnostic.form=await form.evaluate(f=>({method:f.method.toUpperCase(),fields:[...f.elements].map(e=>({type:e.type,name:(e.name||'').replace(/^x10_username_.+$/,'x10_username_*'),disabled:e.disabled,required:e.required})),captchaTokenPresent:Boolean(f.querySelector('[name="g-recaptcha-response"]')?.value)}));
   engine.save(d);
   mark('IDENTIFIER_FILL');
@@ -272,6 +293,7 @@ export async function x10Login(engine,d,args,signal) {
   await fields.password.fill(credentials.password);
   mark('REMEMBER_ME');
   await setX10Remember(form);
+  await capture('FORM_READY');
   mark('SUBMIT');
   state.submitArmed=true;
   // requestSubmit retains native validation and submit handlers even when an
@@ -283,8 +305,9 @@ export async function x10Login(engine,d,args,signal) {
   await page.waitForTimeout(500);
   const deadline=Date.now()+15000;
   while(Date.now()<deadline&&!signal.aborted) {
-   if(await authenticated())return success(state.submitted,'AUTHENTICATED');
+   if(await authenticated()){await capture('AUTHENTICATED');return success(state.submitted,'AUTHENTICATED');}
    if(new URL(page.url()).pathname==='/error') {
+    await capture('X10_ERROR');
     mark('ERROR_SESSION_CHECK');
     // One GET checks a possibly established session without resubmitting credentials.
     diagnostic.errorURL=loginEvidenceURL(page.url());
@@ -301,7 +324,7 @@ export async function x10Login(engine,d,args,signal) {
     await page.goto(X10_LOGIN,{waitUntil:'domcontentloaded',timeout:15000});
     const recoveryDeadline=Math.min(deadline,Date.now()+5000);
     while(Date.now()<recoveryDeadline&&!signal.aborted) {
-     if(await authenticated())return success(state.submitted,'AUTHENTICATED_AFTER_ERROR');
+     if(await authenticated()){await capture('AUTHENTICATED_AFTER_ERROR');return success(state.submitted,'AUTHENTICATED_AFTER_ERROR');}
      await page.waitForTimeout(250);
     }
     throw fault(errorCode);
@@ -310,6 +333,7 @@ export async function x10Login(engine,d,args,signal) {
   }
   throw fault(state.submitted?'LOGIN_NOT_VERIFIED':'LOGIN_SUBMISSION_BLOCKED');
  } catch(e) {
+  await capture('FAILURE');
   Object.assign(diagnostic,{stage,credentialSubmissionObserved:state.submitted,submittedAt:state.submittedAt||null,blockedRequests:blocked,finishedAt:new Date().toISOString()});
   if(page) {
    try {

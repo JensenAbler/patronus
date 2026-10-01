@@ -32,3 +32,11 @@ Earlier history remains there. The OAuth implementation was adapted from the sam
 source with Patronus-specific scopes, branding, and independent state. This
 repository contains source only, never browser profiles, OAuth credentials, or
 retrieved private content.
+
+
+X10 login diagnostics can be requested with `screenshots:true`; stage images mask
+all input and textarea values and are retained as authenticated job artifacts.
+`headed:true` runs the same Chromium and login policy on the service's local Xvfb
+display. The installer requires `xvfb` and `xauth`; no remote viewer is exposed.
+Headless remains the default. X10's explicit server cooldown rejects fresh login
+jobs while allowing existing-key recovery and credential-free session checks.

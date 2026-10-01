@@ -47,6 +47,7 @@ if pathlib.Path('/sys/module/apparmor/parameters/enabled').exists():
  policy_path.write_text(policy);run('apparmor_parser','-r',str(policy_path))
 for p in ['/var/lib/patronus','/run/patronus']:
  pathlib.Path(p).mkdir(parents=True,exist_ok=True);run('chown','patronus:patronus',p);os.chmod(p,0o750 if p=='/run/patronus' else 0o700)
+if not shutil.which('xvfb-run') or not shutil.which('xauth'): raise SystemExit('Install xvfb and xauth before activation')
 unit=f"""[Unit]
 Description=Patronus persistent web reader
 After=network-online.target
@@ -54,7 +55,7 @@ After=network-online.target
 Type=simple
 User=patronus
 Group=patronus
-ExecStart=/usr/bin/node {target}/src/patronus/server.js
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x1024x24 -nolisten tcp" /usr/bin/node {target}/src/patronus/server.js
 Environment=PLAYWRIGHT_BROWSERS_PATH={target}/browsers
 Environment=HOME=/var/lib/patronus
 UMask=0077

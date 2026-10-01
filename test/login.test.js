@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, symlinkSync, rmSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Patronus } from '../src/patronus/engine.js';
-import { readX10Credentials, loginRequestPolicy, loginEvidenceURL, redactLoginText, trackLoginResponses, x10AuthenticationEvidence, classifyX10Error, continueX10Request, diagnoseX10Error } from '../src/patronus/login.js';
+import { readX10Credentials, loginRequestPolicy, loginEvidenceURL, redactLoginText, trackLoginResponses, x10AuthenticationEvidence, classifyX10Error, continueX10Request, diagnoseX10Error, maskedLoginScreenshot } from '../src/patronus/login.js';
 
 const req=(url,method='POST',redirect=false)=>({url:()=>url,method:()=>method,
  redirectedFrom:()=>redirect?{}:null,frame:()=>({url:()=> 'https://x10hosting.com/login'}),resourceType:()=> 'document'});
@@ -140,10 +140,12 @@ test('browser login error recovery checks the session and never replays the cred
   try {
    mkdirSync(join(root,'accounts'));
    writeFileSync(join(root,'accounts','x10.json'),JSON.stringify({email:'fixture@example.test',password:'private-fixture-password'}),{mode:0o600});
-   const job=engine.login({account:'x10',solveCaptchas:false,idempotencyKey:'error-session-fixture',timeoutSeconds:60});
+   const job=engine.login({account:'x10',solveCaptchas:false,screenshots:true,idempotencyKey:'error-session-fixture',timeoutSeconds:60});
    await engine.tick();
    const done=engine.status({jobId:job.jobId});
    assert.equal(posts,1);assert.equal(checks,recover==='blocked'?0:1);
+   assert.ok(done.loginDiagnostic.screenshots.some(s=>s.stage==='FORM_READY'&&s.artifactId));
+   assert.ok(done.loginDiagnostic.screenshots.some(s=>s.stage==='X10_ERROR'&&s.artifactId));
    assert.equal(done.loginDiagnostic.credentialSubmissionObserved,true);
    assert.ok(done.loginDiagnostic.submittedAt);
    if(recover===true) {
@@ -181,4 +183,50 @@ test('specific provider block feedback is structured without treating generic li
  const generic=diagnoseX10Error('Unknown Error\ncommon error conditions\nBrowser Blocklisted\nIP Blocklisted\nYour error code is unknown.');
  assert.equal(generic.specific,false);assert.equal(generic.category,'X10_ERROR_PAGE');assert.equal(generic.supportCode,null);
  assert.equal(classifyX10Error({network:[],serverDiagnosis:specific}),'X10_BROWSER_BLOCKLISTED');
+});
+
+
+test('X10 server cooldown blocks fresh submissions but permits key recovery and session checks',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'patronus-cooldown-'));
+ const engine=new Patronus(root);
+ try {
+  const args={account:'x10',idempotencyKey:'cooldown-original',timeoutSeconds:30};
+  const job=engine.login(args),d=engine.status({jobId:job.jobId});
+  d.state='failed';
+  d.loginDiagnostic={credentialSubmissionObserved:true,submittedAt:new Date().toISOString(),
+   errorMessage:'Browser Blocklisted\nAll issues must be resolved including waiting 24 hours for temporary blocks to expire.'};
+  engine.save(d);
+  assert.throws(()=>engine.login({...args,idempotencyKey:'cooldown-new-attempt'}),{code:'LOGIN_SERVER_COOLDOWN'});
+  assert.equal(engine.login(args).jobId,job.jobId);
+  assert.ok(engine.login({...args,sessionOnly:true,idempotencyKey:'cooldown-session-check'}).jobId);
+  d.loginDiagnostic.submittedAt=new Date(Date.now()-86401000).toISOString();engine.save(d);
+  assert.ok(engine.login({...args,idempotencyKey:'cooldown-after-expiry'}).jobId);
+ }finally{await engine.close();rmSync(root,{recursive:true,force:true});}
+});
+
+test('stage screenshots mask editable secrets without changing the page',{skip:!process.env.PATRONUS_TEST_CHROMIUM},async()=>{
+ const browser=await chromium.launch({executablePath:process.env.PATRONUS_TEST_CHROMIUM,headless:true,chromiumSandbox:false});
+ try {
+  const page=await browser.newPage();
+  await page.setContent('<input type=email value="first@example.test"><input type=password value="first-secret"><textarea>first-token</textarea>');
+  const first=await maskedLoginScreenshot(page);
+  await page.locator('input[type=email]').fill('second@example.test');
+  await page.locator('input[type=password]').fill('second-secret');
+  await page.locator('textarea').fill('second-token');
+  const second=await maskedLoginScreenshot(page);
+  assert.deepEqual(first,second);
+  assert.equal(await page.locator('input[type=password]').inputValue(),'second-secret');
+ }finally{await browser.close();}
+});
+
+
+test('new login diagnostics defaults preserve historical idempotency inputs',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'patronus-login-defaults-'));
+ const engine=new Patronus(root);
+ try {
+  const idempotencyKey='historical-login-key';
+  const old=engine.start({urls:['https://x10hosting.com/login'],mode:'login',profile:'x10',
+   timeoutSeconds:180,idempotencyKey,solveCaptchas:true,sessionOnly:false,maxBytes:52428800,maxPages:1});
+  assert.equal(engine.login({account:'x10',idempotencyKey}).jobId,old.jobId);
+ }finally{await engine.close();rmSync(root,{recursive:true,force:true});}
 });
