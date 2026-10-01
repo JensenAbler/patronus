@@ -1,3 +1,4 @@
+import { computerLogin } from './computer-login.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, statfsSync, statSync, openSync, readSync, closeSync, createWriteStream, readdirSync, unlinkSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,7 +17,7 @@ const now=()=>new Date().toISOString();
 const digest=b=>createHash('sha256').update(b).digest('hex');
 export class Patronus {
  constructor(root,{launch=options=>chromium.launchPersistentContext(options.path,options.config),requestFn=request}={}) {
-  this.root=root;this.launch=launch;this.request=requestFn;this.active=null;
+  this.root=root;this.launch=launch;this.request=requestFn;this.active=null;this.computerSessions=new Map();this.computerLogin=computerLogin;
   for(const p of ['jobs','profiles'])mkdirSync(join(root,p),{recursive:true,mode:0o700});
   this.db=new DatabaseSync(join(root,'jobs.sqlite'));
   this.db.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, key TEXT UNIQUE, input TEXT, data TEXT);");
@@ -30,7 +31,7 @@ export class Patronus {
  get(id){const r=this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);if(!r)throw fault('NOT_FOUND');return {args:JSON.parse(r.input),data:JSON.parse(r.data)};}
  status({jobId}){return this.get(jobId).data;}
  capabilities(){return {name:'Patronus',version:'0.4.1',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
- login({account,timeoutSeconds=180,idempotencyKey,solveCaptchas=true,sessionOnly=false,headed=false,screenshots=false}){
+ login({account,timeoutSeconds=180,idempotencyKey,solveCaptchas=true,sessionOnly=false,headed=false,screenshots=false,interaction='programmatic'}){
   if(account!=='x10')throw fault('ACCOUNT_UNSUPPORTED');
   // Recovering an existing key is read-only; a fresh submission must respect X10's own cooldown.
   if(!sessionOnly&&!this.db.prepare('SELECT id FROM jobs WHERE key=?').get(idempotencyKey)) {
@@ -42,7 +43,32 @@ export class Patronus {
     if(diagnosis.minimumWaitSeconds&&until>Date.now())throw fault('LOGIN_SERVER_COOLDOWN','X10 explicitly requires waiting until '+new Date(until).toISOString()+'. Session-only checks remain available.');
    }
   }
-  return this.start({urls:[X10_LOGIN],mode:'login',profile:'x10',timeoutSeconds,idempotencyKey,solveCaptchas,sessionOnly,...(headed?{headed:true}:{}),...(screenshots?{screenshots:true}:{}),maxBytes:52428800,maxPages:1});
+  return this.start({urls:[X10_LOGIN],mode:'login',profile:'x10',timeoutSeconds,idempotencyKey,solveCaptchas,sessionOnly,...(headed?{headed:true}:{}),...(screenshots||interaction==='computer-use'?{screenshots:true}:{}),...(interaction==='computer-use'?{interaction,headed:true}:{}),maxBytes:52428800,maxPages:1});
+ }
+
+ async computerAction(args) {
+  const {jobId,idempotencyKey,...input}=args;
+  const stored=this.get(jobId).data,session=this.computerSessions.get(jobId);
+  const d=session?.data||stored,control=d.computerUse;
+  if(!control)throw fault('COMPUTER_SESSION_NOT_READY');
+  const payload=JSON.stringify(input),existing=control.commands.find(c=>c.key===idempotencyKey);
+  if(existing) {
+   if(existing.payload!==payload)throw fault('IDEMPOTENCY_CONFLICT');
+   if(existing.state==='completed')return existing.result;
+   throw fault(existing.code||'COMPUTER_ACTION_UNCERTAIN');
+  }
+  if(!session)throw fault('COMPUTER_SESSION_ENDED');
+  if(session.busy)throw fault('COMPUTER_ACTION_BUSY');
+  if(control.commands.length>=40)throw fault('COMPUTER_ACTION_LIMIT');
+  const receipt={key:idempotencyKey,payload,state:'running',at:now()};
+  control.commands.push(receipt);this.save(d);session.busy=true;
+  try {
+   const result=await session.handler(input);
+   receipt.state='completed';receipt.result=result;this.save(d);return result;
+  }catch(e) {
+   receipt.state='failed';receipt.code=/^[A-Z][A-Z0-9_]+$/.test(e.code||'')?e.code:'COMPUTER_ACTION_FAILED';
+   this.save(d);throw fault(receipt.code);
+  }finally {session.busy=false;}
  }
  start(args){
   for(const u of args.urls)safeURL(u);

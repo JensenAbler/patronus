@@ -202,7 +202,8 @@ test('Patronus endpoint publishes discovery aliases and serves MCP only after re
     const capabilities = await client.callTool({ name: 'patronus_capabilities', arguments: {} });
     assert.equal(capabilities.structuredContent.ok, true);
     assert.equal(capabilities.structuredContent.name, 'Patronus');
-    assert.equal(listed.tools.length,8);
+    assert.equal(listed.tools.length,9);
+    assert.ok(listed.tools.some(t=>t.name==='patronus_login_action'));
     assert.ok(listed.tools.every(tool=>tool.name.startsWith('patronus_')));
     const denied=await client.callTool({name:'patronus_start',arguments:{urls:['http://127.0.0.1/private'],rendering:'http',idempotencyKey:'private-address-denied'}});
     assert.equal(denied.structuredContent.ok,true);
@@ -244,7 +245,7 @@ test('real browser follows consent redirect and completes authenticated MCP', { 
   const client = new Client({ name: 'browser-regression', version: '1.0.0' });
   try {
     await client.connect(new StreamableHTTPClientTransport(new URL(f.resource), { requestInit: { headers: { Authorization: 'Bearer ' + token.access_token } } }));
-    assert.equal((await client.listTools()).tools.length, 8);
+    assert.ok((await client.listTools()).tools.some(t=>t.name==='patronus_login_action'));
     assert.equal((await client.callTool({ name: 'patronus_capabilities', arguments: {} })).structuredContent.ok, true);
   } finally { await client.close(); }
 });

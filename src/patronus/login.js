@@ -174,7 +174,7 @@ export async function x10Login(engine,d,args,signal) {
    if(image.length>2097152)throw fault('DIAGNOSTIC_LIMIT');
    item.artifactId=engine.diagnosticArtifact(d,args,'login-'+label.toLowerCase()+'.png','image/png',image);
   }catch {item.error='SCREENSHOT_UNAVAILABLE';}
-  engine.save(d);
+  engine.save(d);return item;
  };
  const blocked={};
  const state={submitArmed:false,submitted:false,challengeArmed:false,probeOnly:args.sessionOnly===true,solverState:{armed:false}};
@@ -228,6 +228,7 @@ export async function x10Login(engine,d,args,signal) {
     coverage:{scope:'Same-origin authenticated account portal and exact logout endpoint verified.'}};
   };
   if(await authenticated()){await capture('EXISTING_SESSION');return success(false,'EXISTING_SESSION');}
+  if(args.interaction==='computer-use')return await engine.computerLogin({engine,d,args,signal,page,credentials,state,diagnostic,capture,authenticated,success,mark});
   if(args.sessionOnly) {
    mark('SESSION_CHECK_COMPLETE');
    Object.assign(diagnostic,{credentialSubmissionObserved:false,blockedRequests:blocked,finishedAt:new Date().toISOString()});

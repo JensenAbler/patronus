@@ -34,3 +34,34 @@ specific diagnosis. Explicit browser/IP/network/country block pages stop the wor
 without another navigation or credential submission. Diagnostics also distinguish
 request-policy blocks that occurred before the credential response from later
 asset blocks. No browser identity or network changes are made to bypass a block.
+
+## Screenshot-driven computer use
+
+Set `interaction:"computer-use"` on `patronus_login`. The job opens the existing
+Chromium/profile in headed mode and waits for agent actions for up to the job's
+300-second deadline. No new model, remote viewer or credential transport is added.
+The agent reads `computerUse.screenshotArtifactId` via `patronus_artifact`, looks
+at the masked screenshot and chooses coordinates. The browser worker does not
+choose targets from DOM selectors.
+
+Use `patronus_login_action` with the job ID, a unique action idempotency key,
+the latest screenshot artifact ID, and an action: `snapshot`, `click`,
+`credential`, `press`, `solveCaptcha`, `submit`, or `finish`.
+Coordinate actions use viewport pixels. `credential` accepts only the private
+`email` or `password` reference and types it with normal keyboard events into
+a validated field under those coordinates; secret values are never tool inputs.
+Solve CAPTCHA before filling credentials. `solveCaptcha` is an explicit use of
+the configured solver; a token remains unproven until the site accepts it.
+`submit` arms one POST and clicks the native submit button under the coordinates;
+it does not invoke requestSubmit or a JavaScript click. Ordinary clicks and keys
+cannot arm credential submission. DOM checks validate credential/submit targets
+and authenticated portal markers; they do not select interactive targets.
+
+Action receipts and masked screenshots are durable. Repeating the same completed
+action key returns its receipt without repeating input. Interrupted actions are
+uncertain and never replayed. A service restart ends the live browser session;
+recover its job and receipts rather than claiming the process survived.
+Stale screenshots, out-of-viewport coordinates, concurrency and excess actions
+are rejected. Session-only computer-use probes forbid credential typing, solving
+and submission. Cancellation/deadline close the browser and retain evidence.
+Existing cooldown, sandbox, network and authenticated-portal checks still apply.
