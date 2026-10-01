@@ -44,6 +44,19 @@ export function readX10Credentials(root) {
  return value;
 }
 
+export async function setX10Remember(form) {
+ const checkbox=form.locator('input[type=checkbox]');
+ if(await checkbox.count()!==1||await checkbox.isChecked())return;
+ if(await checkbox.isVisible())await checkbox.check({timeout:5000});
+ else {
+  const label=form.locator('label[for="remember"]');
+  if(await checkbox.getAttribute('id')!=='remember'||await label.count()!==1||!(await label.isVisible()))
+   throw fault('LOGIN_REMEMBER_UNAVAILABLE');
+  await label.click({timeout:5000});
+ }
+ if(!(await checkbox.isChecked()))throw fault('LOGIN_REMEMBER_UNAVAILABLE');
+}
+
 export async function locateX10Fields(form) {
  const candidates=form.locator('input[type=email], input[name=email], input[type=text][name^="x10_username_"]');
  const visible=[];
@@ -145,12 +158,13 @@ export async function x10Login(engine,d,args,signal) {
     throw fault(verification.frameText.some(f=>f.imageVisible)?'INTERACTIVE_CHALLENGE_PRESENT':verification.clickOutcome==='timeout'?'VERIFICATION_CHECKBOX_UNAVAILABLE':'VERIFICATION_NOT_COMPLETED');
    }
   }
-  stage='CREDENTIAL_FILL';
+  stage='IDENTIFIER_FILL';
   state.credentialsFilled=true;
   await fields.identifier.fill(credentials.email);
+  stage='PASSWORD_FILL';
   await fields.password.fill(credentials.password);
-  const remember=form.locator('input[type=checkbox]');
-  if(await remember.count()===1)await remember.check();
+  stage='REMEMBER_ME';
+  await setX10Remember(form);
   stage='SUBMIT';
   state.submitArmed=true;
   await form.locator('button[type=submit], input[type=submit]').click({timeout:10000});
