@@ -1,6 +1,7 @@
 import { readFileSync, lstatSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { startProxy, resolvePublic, fault, agent } from './network.js';
+import { launchConfig, profileDir, browserKind } from './launch.js';
 import { browserRequestPolicy, continueBrowserRequest, blockedRequest } from './browser-policy.js';
 
 import { captureWidgets, configuredSolver, solvePageChallenge, challengeRequestPolicy } from './challenges.js';
@@ -158,7 +159,7 @@ export async function maskedLoginScreenshot(page) {
 
 export async function x10Login(engine,d,args,signal) {
  const credentials=args.sessionOnly?{email:'',password:''}:readX10Credentials(engine.root);
- const profile=join(engine.root,'profiles','x10');
+ const browser=browserKind(args),profile=profileDir(engine.root,'x10',browser);
  mkdirSync(profile,{recursive:true,mode:0o700});
  let context, page, stopTracking, observedBytes=0, stage='BROWSER_START';
  const diagnostic={stage,timeline:[{stage,at:new Date().toISOString()}],network:[],blocked:[]};
@@ -181,9 +182,8 @@ export async function x10Login(engine,d,args,signal) {
  const solver=args.sessionOnly?null:configuredSolver(engine,args);
  const proxy=await startProxy({signal,maxBytes:args.maxBytes-d.bytes,onBytes:n=>{d.bytes+=n-observedBytes;observedBytes=n;}});
  try {
-  context=await engine.launch({path:profile,config:{channel:'chromium',headless:!args.headed,chromiumSandbox:true,
-   proxy:{server:proxy.url,bypass:'<-loopback>'},serviceWorkers:'block',acceptDownloads:false,
-   permissions:[],userAgent:agent,...(args.headed?{viewport:{width:1100,height:900}}:{}),args:[...(args.headed?['--disable-gpu']:[]),'--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--disable-background-networking']}});
+  context=await engine.launch({path:profile,browser,config:launchConfig({browser,headed:args.headed,proxy,permissions:[],userAgent:agent,
+   ...(args.headed?{viewport:{width:1100,height:900}}:{})})});
   if(signal.aborted)throw signal.reason;
   signal.addEventListener('abort',()=>context.close().catch(()=>{}),{once:true});
   if(solver){solver.apiKey='';await context.addInitScript(captureWidgets);}

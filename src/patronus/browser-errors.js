@@ -12,6 +12,11 @@ export function browserError(error,stage,signal) {
  if(net==='ERR_NAME_NOT_RESOLVED')return fault('BROWSER_DNS_ERROR');
  if(net&&/CERT_|SSL_/.test(net))return fault('BROWSER_TLS_ERROR');
  if(net)return fault('BROWSER_NETWORK_ERROR');
+ // Firefox reports NSS/necko names instead of net:: codes.
+ const gecko=text.match(/\b((?:NS_ERROR|SSL_ERROR|SEC_ERROR|MOZILLA_PKIX_ERROR)_[A-Z0-9_]+)\b/)?.[1];
+ if(gecko==='NS_ERROR_UNKNOWN_HOST')return fault('BROWSER_DNS_ERROR');
+ if(gecko&&/^(SSL_|SEC_|MOZILLA_PKIX_)|NS_ERROR_(GENERATE_FAILURE|NET_INADEQUATE_SECURITY)/.test(gecko))return fault('BROWSER_TLS_ERROR');
+ if(gecko&&/^NS_ERROR_(NET_|CONNECTION_|PROXY_|UNKNOWN_PROXY|NET_TIMEOUT|NET_RESET|NET_INTERRUPT|NET_PARTIAL|PORT_ACCESS|OFFLINE|REDIRECT_LOOP|DOCUMENT_NOT_CACHED)/.test(gecko))return fault('BROWSER_NETWORK_ERROR');
  if(/Target (page, context or browser|closed)|has been closed/i.test(text))return fault('BROWSER_CLOSED');
  return fault('BROWSER_RETRIEVAL_ERROR');
 }

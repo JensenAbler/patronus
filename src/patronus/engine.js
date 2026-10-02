@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
-import { chromium } from 'playwright';
+import { defaultLaunch, launchConfig, profileDir, browserKind, BROWSERS } from './launch.js';
 import { request, safeURL, displayURL, fault, startProxy, resolvePublic, agent } from './network.js';
 import { extract } from './extract.js';
 import { browserError } from './browser-errors.js';
@@ -18,9 +18,9 @@ const terminal=new Set(['succeeded','partial','failed','cancelled']);
 const now=()=>new Date().toISOString();
 const digest=b=>createHash('sha256').update(b).digest('hex');
 export class Patronus {
- constructor(root,{launch=options=>chromium.launchPersistentContext(options.path,options.config),requestFn=request}={}) {
+ constructor(root,{launch=defaultLaunch,requestFn=request}={}) {
   this.root=root;this.launch=launch;this.request=requestFn;this.active=null;this.computerSessions=new Map();this.computerLogin=computerLogin;
-  for(const p of ['jobs','profiles'])mkdirSync(join(root,p),{recursive:true,mode:0o700});
+  for(const p of ['jobs','profiles','firefox-profiles'])mkdirSync(join(root,p),{recursive:true,mode:0o700});
   this.db=new DatabaseSync(join(root,'jobs.sqlite'));
   this.db.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, key TEXT UNIQUE, input TEXT, data TEXT);");
   // A service restart cannot silently replay a navigation with unknown effects.
@@ -32,8 +32,8 @@ export class Patronus {
  save(d){this.db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify(d),d.jobId);}
  get(id){const r=this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);if(!r)throw fault('NOT_FOUND');return {args:JSON.parse(r.input),data:JSON.parse(r.data)};}
  status({jobId}){return this.get(jobId).data;}
- capabilities(){return {name:'Patronus',version:'0.4.3',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
- login({account,timeoutSeconds=180,idempotencyKey,solveCaptchas=true,sessionOnly=false,headed=false,screenshots=false,interaction='programmatic'}){
+ capabilities(){return {name:'Patronus',version:'0.5.0',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],browsers:[...BROWSERS],headed:'Optional per job on the service-local Xvfb display; no remote viewer.',inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
+ login({account,timeoutSeconds=180,idempotencyKey,solveCaptchas=true,sessionOnly=false,headed=false,screenshots=false,interaction='programmatic',browser}){
   if(account!=='x10')throw fault('ACCOUNT_UNSUPPORTED');
   if(!Number.isInteger(timeoutSeconds)||timeoutSeconds<30||timeoutSeconds>(interaction==='computer-use'?900:300))throw fault('LOGIN_TIMEOUT_POLICY');
   // Recovering an existing key is read-only; a fresh submission must respect X10's own cooldown.
@@ -46,7 +46,7 @@ export class Patronus {
     if(diagnosis.minimumWaitSeconds&&until>Date.now())throw fault('LOGIN_SERVER_COOLDOWN','X10 explicitly requires waiting until '+new Date(until).toISOString()+'. Session-only checks remain available.');
    }
   }
-  return this.start({urls:[X10_LOGIN],mode:'login',profile:'x10',timeoutSeconds,idempotencyKey,solveCaptchas,sessionOnly,...(headed?{headed:true}:{}),...(screenshots||interaction==='computer-use'?{screenshots:true}:{}),...(interaction==='computer-use'?{interaction,headed:true}:{}),maxBytes:52428800,maxPages:1});
+  return this.start({urls:[X10_LOGIN],mode:'login',profile:'x10',timeoutSeconds,idempotencyKey,solveCaptchas,sessionOnly,...(browser==='firefox'?{browser}:{}),...(headed?{headed:true}:{}),...(screenshots||interaction==='computer-use'?{screenshots:true}:{}),...(interaction==='computer-use'?{interaction,headed:true}:{}),maxBytes:52428800,maxPages:1});
  }
 
  async computerAction(args) {
@@ -75,6 +75,8 @@ export class Patronus {
  }
  start(args){
   for(const u of args.urls)safeURL(u);
+  // Browser selection only means something when a browser renders the page.
+  if((args.browser==='firefox'||args.headed)&&args.rendering==='http')throw fault('RENDERING_CONFLICT','browser and headed require browser or auto rendering.');
   if(args.resumeJobId){
    const old=this.get(args.resumeJobId);
    if(args.mode!=='download'||args.urls.length!==1||old.args.urls.length!==1||old.args.urls[0]!==args.urls[0]||old.args.profile!==args.profile||!terminal.has(old.data.state))throw fault('RESUME_MISMATCH');
@@ -83,7 +85,7 @@ export class Patronus {
   if(existing){if(existing.input!==input)throw fault('IDEMPOTENCY_CONFLICT');return JSON.parse(existing.data);}
   const pending=this.db.prepare('SELECT data FROM jobs').all().filter(r=>!terminal.has(JSON.parse(r.data).state)).length;
   if(pending>=50)throw fault('QUEUE_FULL');
-  const d={jobId:randomUUID(),state:'queued',createdAt:now(),startedAt:null,finishedAt:null,mode:args.mode,profile:args.profile,urls:args.urls.map(displayURL),pages:[],artifacts:[],obstacles:[],warnings:[],trace:[],bytes:0};
+  const d={jobId:randomUUID(),state:'queued',createdAt:now(),startedAt:null,finishedAt:null,mode:args.mode,profile:args.profile,browser:browserKind(args),headed:Boolean(args.headed),urls:args.urls.map(displayURL),pages:[],artifacts:[],obstacles:[],warnings:[],trace:[],bytes:0};
   mkdirSync(join(this.root,'jobs',d.jobId),{mode:0o700});
   this.db.prepare('INSERT INTO jobs VALUES(?,?,?,?)').run(d.jobId,args.idempotencyKey,input,JSON.stringify(d));return d;
  }
@@ -167,8 +169,8 @@ export class Patronus {
   return item;
  }
  async browser(url,d,args,signal){
-  const profile=join(this.root,'profiles',args.profile);
-  if(args.profile!=='public'&&!existsSync(profile))throw fault('PROFILE_MISSING');
+  const provisioned=join(this.root,'profiles',args.profile),browser=browserKind(args),profile=profileDir(this.root,args.profile,browser);
+  if(args.profile!=='public'&&!existsSync(provisioned))throw fault('PROFILE_MISSING');
   mkdirSync(profile,{recursive:true,mode:0o700});
   let observedBytes=0,context,page,response,tracker,stage='launch';
   const diagnosticStart=d.diagnostics?.length||0;
@@ -177,12 +179,11 @@ export class Patronus {
   const solver=configuredSolver(this,args);
   const proxy=await startProxy({signal,maxBytes:args.maxBytes-d.bytes,onBytes:n=>{d.bytes+=n-observedBytes;observedBytes=n;}});
   try{
-   context=await this.launch({path:profile,config:{channel:'chromium',headless:true,chromiumSandbox:true,proxy:{server:proxy.url,bypass:'<-loopback>'},serviceWorkers:'block',acceptDownloads:false,permissions:[],userAgent:agent,
-    args:['--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--disable-background-networking']}});
+   context=await this.launch({path:profile,browser,config:launchConfig({browser,headed:args.headed,proxy,permissions:[],userAgent:agent})});
    if(signal.aborted)throw signal.reason;
    signal.addEventListener('abort',()=>context.close().catch(()=>{}),{once:true});
    if(solver){solver.apiKey='';await context.addInitScript(captureWidgets);}
-   const imported=join(profile,'access.json');
+   const imported=join(provisioned,'access.json');
    if(existsSync(imported)){const state=JSON.parse(readFileSync(imported,'utf8'));await context.addCookies(state.cookies||[]);}
    await context.route('**/*',async route=>{
     const req=route.request();
@@ -302,12 +303,13 @@ export class Patronus {
      }else if(args.mode==='download'){
       let headers={};
       if(args.profile!=='public'){
-       const profile=join(this.root,'profiles',args.profile);
-       if(!existsSync(profile))throw fault('PROFILE_MISSING');
+       const provisioned=join(this.root,'profiles',args.profile),browser=browserKind(args),profile=profileDir(this.root,args.profile,browser);
+       if(!existsSync(provisioned))throw fault('PROFILE_MISSING');
+       mkdirSync(profile,{recursive:true,mode:0o700});
        const proxy=await startProxy({signal:controller.signal,maxBytes:0});let context;
-       try{context=await this.launch({path:profile,config:{channel:'chromium',headless:true,chromiumSandbox:true,proxy:{server:proxy.url,bypass:'<-loopback>'},serviceWorkers:'block',acceptDownloads:false,args:['--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--disable-background-networking']}});
+       try{context=await this.launch({path:profile,browser,config:launchConfig({browser,proxy})});
         if(controller.signal.aborted)throw controller.signal.reason;
-        await context.route('**/*',route=>route.abort());const imported=join(profile,'access.json');if(existsSync(imported))await context.addCookies(JSON.parse(readFileSync(imported,'utf8')).cookies||[]);
+        await context.route('**/*',route=>route.abort());const imported=join(provisioned,'access.json');if(existsSync(imported))await context.addCookies(JSON.parse(readFileSync(imported,'utf8')).cookies||[]);
         const cookies=await context.cookies(raw);headers={cookie:cookies.map(c=>c.name+'='+c.value).join('; ')};
        }finally{await context?.close().catch(()=>{});proxy.close();}
       }

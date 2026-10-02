@@ -44,3 +44,12 @@ and action receipts include `remainingSeconds`; the deadline never renews and
 expired actions never replay. Programmatic login remains capped at five minutes.
 Headless remains the default. X10's explicit server cooldown rejects fresh login
 jobs while allowing existing-key recovery and credential-free session checks.
+
+Both `patronus_start` and `patronus_login` accept `browser:"firefox"` (default
+`chromium`). `patronus_start` also accepts `headed:true`, which renders on the same
+service-local Xvfb display. Firefox keeps its own persistent profiles under
+`firefox-profiles/<name>`; Chromium sessions are not shared with it, though a
+provisioned `profiles/<name>/access.json` imports into either. The same proxy,
+request policy and byte budget apply; Firefox gets equivalent prefs for QUIC,
+WebRTC, DoH and background services. Its content sandbox needs the installer's
+exact-path AppArmor userns grant to keep PID/user namespaces.

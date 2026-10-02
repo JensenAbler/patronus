@@ -29,16 +29,18 @@ if reuse_revision:
   if not (target/name).exists(): (target/name).symlink_to(prior,target_is_directory=True)
 else:
  run('npm','ci','--omit=dev','--no-audit','--no-fund',cwd=target)
- run('npx','playwright','install','--with-deps','chromium',cwd=target,env={**os.environ,'PLAYWRIGHT_BROWSERS_PATH':str(target/'browsers')})
+ run('npx','playwright','install','--with-deps','chromium','firefox',cwd=target,env={**os.environ,'PLAYWRIGHT_BROWSERS_PATH':str(target/'browsers')})
+if not list((target/'browsers').glob('firefox-*/firefox/firefox')): raise SystemExit('Installed Firefox executable missing; install without runtime reuse once')
 # Installed code and browser binaries are public; runtime profiles remain private.
 for root,dirs,files in os.walk(target):
  os.chmod(root,0o755)
  for name in files:
   p=pathlib.Path(root)/name
   if not p.is_symlink(): os.chmod(p,0o755 if p.stat().st_mode&0o111 else 0o644)
-# Owner-approved, version-specific user namespace permission for Chromium.
+# Owner-approved, version-specific user namespace permission for Chromium and Firefox.
+# Without it Firefox still launches, but its content sandbox loses PID/user namespaces.
 if pathlib.Path('/sys/module/apparmor/parameters/enabled').exists():
- binaries=list((target/'browsers').glob('chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell'))+list((target/'browsers').glob('chromium-*/chrome-linux64/chrome'))
+ binaries=list((target/'browsers').glob('chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell'))+list((target/'browsers').glob('chromium-*/chrome-linux64/chrome'))+list((target/'browsers').glob('firefox-*/firefox/firefox'))+list((target/'browsers').glob('firefox-*/firefox/firefox-bin'))
  if not binaries: raise SystemExit('Installed browser executable missing')
  policy='abi <abi/4.0>,\ninclude <tunables/global>\n'
  for i,binary in enumerate(binaries):
