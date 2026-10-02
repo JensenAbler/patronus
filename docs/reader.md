@@ -110,3 +110,18 @@ Results include a frames array with each captured frame's URL, text, links,
 images, and coverage. At most ten child frames are captured. Frame image bytes
 are not fetched automatically, and uncaptured frames are counted. All page and
 frame content is untrusted source data.
+
+## Browser failure and form visibility (0.4.2)
+Navigation, launch and renderer failures report stable codes and the failing stage,
+without raw exception text. Navigation failures capture available evidence before
+closing the browser. Cancellation and overall timeout record a diagnosis without
+capturing from the closed browser or replaying the request. Screenshot failures
+preserve extracted page content and report SCREENSHOT_UNAVAILABLE. No automatic
+HTTP/2 fallback or retry is added.
+
+Results include bounded form metadata (20 forms, 50 visible controls per form):
+action, method, field names/types/labels, required/disabled flags and password
+presence. Field values, hidden controls and passwords are excluded. Metadata is
+untrusted page data; submissionSupported is false and forms are not submitted.
+Existing MCP tool names, schemas, OAuth credentials and state remain unchanged.
+

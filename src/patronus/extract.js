@@ -5,6 +5,20 @@ import { displayURL } from './network.js';
 export function extract(html,url) {
   const {document}=parseHTML(html); const title=document.querySelector('title')?.textContent||'';
   const links=[],images=[];
+  // Describe forms without field values, hidden tokens or credentials.
+  const allForms=[...document.querySelectorAll('form')];
+  const forms=allForms.slice(0,20).map((form,index)=>{
+    let action=null;
+    try{const u=new URL(form.getAttribute('action')||url,url);if(['https:','http:'].includes(u.protocol))action=displayURL(u.href);}catch{}
+    const controls=[...form.querySelectorAll('input,textarea,select,button')];
+    const fields=controls.filter(el=>!['hidden','password'].includes((el.getAttribute('type')||'').toLowerCase())).slice(0,50).map(el=>({
+      tag:el.localName,type:el.getAttribute('type')||(el.localName==='button'?'submit':'text'),
+      name:el.getAttribute('name')||null,id:el.getAttribute('id')||null,
+      label:el.getAttribute('aria-label')||[...document.querySelectorAll('label')].find(l=>el.getAttribute('id')&&l.getAttribute('for')===el.getAttribute('id'))?.textContent.trim()||el.closest('label')?.textContent.trim()||null,
+      required:el.hasAttribute('required'),disabled:el.hasAttribute('disabled')
+    }));
+    return {index,action,method:(form.getAttribute('method')||'GET').toUpperCase(),fields,fieldsOmitted:controls.length-fields.length,hasPassword:controls.some(el=>el.getAttribute('type')?.toLowerCase()==='password'),submissionSupported:false};
+  });
   for(const el of document.querySelectorAll('script,style,noscript,template,input,textarea')) el.remove();
   for(const a of document.querySelectorAll('a[href]')) {
     try{const full=new URL(a.getAttribute('href'),url);if(!['https:','http:'].includes(full.protocol)){a.removeAttribute('href');continue;}
@@ -20,5 +34,5 @@ export function extract(html,url) {
   const converter=new TurndownService({headingStyle:'atx'});converter.use(gfm);
   let markdown=converter.turndown(document.body?.innerHTML??document.documentElement?.outerHTML??'');
   const truncated=markdown.length>500000;markdown=markdown.slice(0,500000);
-  return {title,markdown,links,images,coverage:{textTruncated:truncated,iframes:document.querySelectorAll('iframe').length,scope:'Rendered/extracted document; unvisited links and frames are not claimed complete.'}};
+  return {title,markdown,links,images,forms,coverage:{formsCaptured:forms.length,formsOmitted:allForms.length-forms.length,textTruncated:truncated,iframes:document.querySelectorAll('iframe').length,scope:'Rendered/extracted document; unvisited links and frames are not claimed complete.'}};
 }

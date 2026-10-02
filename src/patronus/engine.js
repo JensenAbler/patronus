@@ -8,6 +8,7 @@ import { Transform } from 'node:stream';
 import { chromium } from 'playwright';
 import { request, safeURL, displayURL, fault, startProxy, resolvePublic, agent } from './network.js';
 import { extract } from './extract.js';
+import { browserError } from './browser-errors.js';
 import { browserRequestPolicy, blockedRequest, continueBrowserRequest } from './browser-policy.js';
 import { trackRequests, waitForReadiness } from './readiness.js';
 import { x10Login, X10_LOGIN, diagnoseX10Error } from './login.js';
@@ -30,7 +31,7 @@ export class Patronus {
  save(d){this.db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify(d),d.jobId);}
  get(id){const r=this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);if(!r)throw fault('NOT_FOUND');return {args:JSON.parse(r.input),data:JSON.parse(r.data)};}
  status({jobId}){return this.get(jobId).data;}
- capabilities(){return {name:'Patronus',version:'0.4.1',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
+ capabilities(){return {name:'Patronus',version:'0.4.2',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
  login({account,timeoutSeconds=180,idempotencyKey,solveCaptchas=true,sessionOnly=false,headed=false,screenshots=false,interaction='programmatic'}){
   if(account!=='x10')throw fault('ACCOUNT_UNSUPPORTED');
   // Recovering an existing key is read-only; a fresh submission must respect X10's own cooldown.
@@ -167,7 +168,8 @@ export class Patronus {
   const profile=join(this.root,'profiles',args.profile);
   if(args.profile!=='public'&&!existsSync(profile))throw fault('PROFILE_MISSING');
   mkdirSync(profile,{recursive:true,mode:0o700});
-  let observedBytes=0,context;
+  let observedBytes=0,context,page,response,tracker,stage='launch';
+  const diagnosticStart=d.diagnostics?.length||0;
   const challengeState={armed:false};
   const solver=configuredSolver(this,args);
   const proxy=await startProxy({signal,maxBytes:args.maxBytes-d.bytes,onBytes:n=>{d.bytes+=n-observedBytes;observedBytes=n;}});
@@ -192,15 +194,16 @@ export class Patronus {
     }catch(e){if(d.obstacles.length<50)d.obstacles.push(blockedRequest(req,e.code||'REQUEST_FAILED'));await route.abort();}
    });
    await context.routeWebSocket('**/*',ws=>ws.close());
-   const page=context.pages()[0]||await context.newPage();
-   const tracker=trackRequests(page);
+   page=context.pages()[0]||await context.newPage();
+   tracker=trackRequests(page);
    page.on('dialog',dialog=>dialog.dismiss());
    page.on('response',r=>{if(d.trace.length<200)d.trace.push({at:now(),url:displayURL(r.url()),status:r.status(),client:agent,route:'browser'});});
    page.on('download',download=>download.cancel());
-   let response;
+   stage='navigation';
    page.on('response',r=>{if(r.request().isNavigationRequest()&&r.frame()===page.mainFrame())response=r;});
    response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:Math.min(60000,args.timeoutSeconds*1000)});
    for(let n=0;n<3;n++){await page.evaluate(()=>window.scrollBy(0,window.innerHeight));await page.waitForTimeout(200);}
+   stage='readiness';
    let readiness=await waitForReadiness(page,tracker,{timeoutMs:(args.browserWaitSeconds??20)*1000,minWaitMs:5000,selector:args.waitForSelector,signal});
    if(await solvePageChallenge(this,page,d,args,signal,challengeState)) {
     readiness=await waitForReadiness(page,tracker,{timeoutMs:(args.browserWaitSeconds??20)*1000,minWaitMs:5000,selector:args.waitForSelector,signal});
@@ -209,6 +212,7 @@ export class Patronus {
    if(readiness.outcome==='timeout')d.obstacles.push({code:'PAGE_NOT_SETTLED',url:displayURL(page.url()),message:'Readiness budget expired; captured available content.',...readiness});
    const code=response?.status()||0;
    if(code>=400){await this.browserFailure(page,response,d,args,'HTTP_ERROR');throw fault(code===401?'AUTH_REQUIRED':code===403?'ACCESS_DENIED':code===402?'PAYMENT_REQUIRED':code===429?'RATE_LIMIT':'HTTP_ERROR','HTTP '+code);}
+   stage='extraction';
    const html=await page.content(),final=page.url(),out=extract(html,final);
    if(/^(just a moment|access denied|verify you are human)/i.test(out.title.trim())){await this.browserFailure(page,response,d,args,'CHALLENGE');throw fault('CHALLENGE','The challenge remains unresolved; this widget may require unsupported verification.');}
    if(await page.locator('input[type=password]').count())out.coverage.possibleLoginPage=true;
@@ -230,9 +234,14 @@ export class Patronus {
    out.coverage.scope='Rendered main document and captured frames; readiness is an observation, not proof of completeness.';
 
    if(args.screenshot){
-    const b=await page.screenshot({fullPage:false});this.budget(d,args,b.length);d.bytes+=b.length;
+    stage='screenshot';
+    let b;
+    try{b=await page.screenshot({fullPage:false,timeout:3000});}
+    catch(e){d.obstacles.push({code:'SCREENSHOT_UNAVAILABLE',url:displayURL(final),reason:browserError(e,stage,signal).code,message:'Page content was preserved; the requested screenshot failed.'});}
+    if(b){this.budget(d,args,b.length);d.bytes+=b.length;
     const id=randomUUID();writeFileSync(join(this.root,'jobs',d.jobId,id),b,{mode:0o600});
     d.artifacts.push({artifactId:id,name:'page.png',mimeType:'image/png',bytes:b.length,sha256:digest(b),complete:true});out.screenshotArtifactId=id;
+    }
    }
    // Reuse browser cookies only for the matching image request.
    for(const im of out.images.slice(0,10)){
@@ -241,7 +250,16 @@ export class Patronus {
     }catch(e){im.retrievalError=e.code||'IMAGE_UNAVAILABLE';}
    }
    return out;
-  }finally{await context?.close().catch(()=>{});proxy.close();}
+  }catch(e){
+   const error=browserError(e,stage,signal);
+   if(page&&(d.diagnostics?.length||0)===diagnosticStart&&!signal.aborted) {
+    const item=await this.browserFailure(page,response,d,args,error.code);
+    item.stage=stage;
+   }else if((d.diagnostics?.length||0)===diagnosticStart) {
+    (d.diagnostics??=[]).push({at:now(),url:displayURL(url),route:'browser',reason:error.code,stage,artifacts:{},captureErrors:[]});
+   }
+   this.save(d);throw error;
+  }finally{tracker?.close();await context?.close().catch(()=>{});proxy.close();}
  }
  async tick(){
   if(this.active)return;
