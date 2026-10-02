@@ -17,6 +17,11 @@ test('computer-use login uses coordinates and private keyboard input, submits on
    request:()=>r.request(),abort:()=>r.abort(),
    fetch:async()=>{
     posts++;
+    const pending=engine.status({jobId:job.jobId});
+    assert.equal(pending.loginDiagnostic.credentialSubmissionObserved,true);
+    assert.ok(pending.loginDiagnostic.submittedAt);
+    // A slow POST used to race the masked screenshot after the native click.
+    await new Promise(resolve=>setTimeout(resolve,1200));
     assert.equal(r.request().postData().includes('keyboard-password'),true);
     return {status:()=>200,headers:()=>({}),dispose:async()=>{}};
    },
@@ -57,6 +62,7 @@ test('computer-use login uses coordinates and private keyboard input, submits on
   assert.equal(JSON.parse(engine.result({jobId:job.jobId}).content)[0].login.authenticated,true);
   assert.equal(done.computerUse.commands.filter(c=>c.state==='completed').length,3);
   assert.equal(done.loginDiagnostic.credentialSubmissionObserved,true);
+  assert.ok(!done.loginDiagnostic.screenshots.some(s=>s.error));
   assert.ok(!JSON.stringify(done).includes('keyboard-password'));
   assert.ok(!JSON.stringify(done).includes('keyboard@example.test'));
   assert.equal(engine.computerSessions.has(job.jobId),false);

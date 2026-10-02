@@ -192,6 +192,11 @@ export async function x10Login(engine,d,args,signal) {
     if(signal.aborted)throw fault('CANCELLED');
     const req=route.request(),decision=loginRequestPolicy(req,state);
     if(!decision.allowed)throw fault(decision.reason);
+    // Persist the one armed submission before network work or screenshot failure.
+    if(decision.kind==='login') {
+     Object.assign(diagnostic,{credentialSubmissionObserved:true,submittedAt:state.submittedAt});
+     engine.save(d);
+    }
     await resolvePublic(req.url());
     engine.budget(d,args);
     await continueX10Request(route,decision,record);

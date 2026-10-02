@@ -65,7 +65,11 @@ export async function computerLogin({engine,d,args,signal,page,credentials,state
     if(!target)throw fault('COMPUTER_SUBMIT_TARGET');
     // Arm only the deliberate screenshot-driven submit click.
     state.submitArmed=true;
+    // Wait for the redirect document without replaying the click or POST.
+    const navigation=page.waitForURL(url=>url.href!=='https://x10hosting.com/login',
+     {waitUntil:'domcontentloaded',timeout:30000}).catch(()=>null);
     await page.mouse.click(a.x,a.y);
+    await navigation;
    }else if(!['snapshot','finish'].includes(a.action))throw fault('COMPUTER_ACTION_POLICY');
    await page.waitForTimeout(500);
    await snapshot('COMPUTER_'+a.action.toUpperCase());
