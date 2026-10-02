@@ -6,7 +6,9 @@ import { solvePageChallenge } from './challenges.js';
 // where a secret may go; it never selects or submits the interactive target.
 export async function computerLogin({engine,d,args,signal,page,credentials,state,diagnostic,capture,authenticated,success,mark}) {
  const viewport=page.viewportSize()||{width:1100,height:900};
- const control=d.computerUse={state:'awaiting-action',viewport,commands:[],
+ const deadlineAt=new Date(Date.parse(d.startedAt)+args.timeoutSeconds*1000).toISOString();
+ const remainingSeconds=()=>Math.max(0,Math.ceil((Date.parse(deadlineAt)-Date.now())/1000));
+ const control=d.computerUse={state:'awaiting-action',deadlineAt,viewport,commands:[],
   screenshotArtifactId:diagnostic.screenshots?.at(-1)?.artifactId||null};
  let done=false,result,failure;
  const snapshot=async label=>{
@@ -82,7 +84,7 @@ export async function computerLogin({engine,d,args,signal,page,credentials,state
     done=true;
    }
    control.state=done?'ended':'awaiting-action';engine.save(d);
-   return {state:control.state,screenshotArtifactId:control.screenshotArtifactId,viewport,authentication:diagnostic.authentication,credentialSubmissionObserved:state.submitted};
+   return {state:control.state,deadlineAt,remainingSeconds:remainingSeconds(),screenshotArtifactId:control.screenshotArtifactId,viewport,authentication:diagnostic.authentication,credentialSubmissionObserved:state.submitted};
   }catch(e) {
    if(state.submitted&&new URL(page.url()).pathname==='/error'){failure=e;done=true;}
    throw e;

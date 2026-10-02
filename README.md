@@ -38,5 +38,9 @@ X10 login diagnostics can be requested with `screenshots:true`; stage images mas
 all input and textarea values and are retained as authenticated job artifacts.
 `headed:true` runs the same Chromium and login policy on the service's local Xvfb
 display. The installer requires `xvfb` and `xauth`; no remote viewer is exposed.
+Computer-use login can use `timeoutSeconds:900` for up to fifteen minutes of
+screenshot inspection and native input. Its status records the absolute `deadlineAt`,
+and action receipts include `remainingSeconds`; the deadline never renews and
+expired actions never replay. Programmatic login remains capped at five minutes.
 Headless remains the default. X10's explicit server cooldown rejects fresh login
 jobs while allowing existing-key recovery and credential-free session checks.

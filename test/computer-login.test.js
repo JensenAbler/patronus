@@ -38,8 +38,12 @@ test('computer-use login uses coordinates and private keyboard input, submits on
   assert.ok(engine.computerSessions.has(job.jobId));
   const image=()=>engine.status({jobId:job.jobId}).computerUse.screenshotArtifactId;
   const first=image();
+  const initial=engine.status({jobId:job.jobId});
+  assert.equal(Date.parse(initial.computerUse.deadlineAt)-Date.parse(initial.startedAt),60000);
   const email={jobId:job.jobId,action:'credential',field:'email',x:100,y:70,screenshotArtifactId:first,idempotencyKey:'computer-email-key'};
   const result=await engine.computerAction(email);
+  assert.equal(result.deadlineAt,initial.computerUse.deadlineAt);
+  assert.ok(result.remainingSeconds>0&&result.remainingSeconds<=60);
   assert.deepEqual(await engine.computerAction(email),result);
   await assert.rejects(engine.computerAction({...email,field:'password'}),{code:'IDEMPOTENCY_CONFLICT'});
   await assert.rejects(engine.computerAction({jobId:job.jobId,action:'click',x:100,y:140,screenshotArtifactId:first,idempotencyKey:'computer-stale-key'}),{code:'COMPUTER_STALE_SCREENSHOT'});
@@ -60,6 +64,20 @@ test('computer-use login uses coordinates and private keyboard input, submits on
   if(job)engine.cancel({jobId:job.jobId});
   await worker?.catch(()=>{});await engine.close();rmSync(root,{recursive:true,force:true});
  }
+});
+
+
+test('computer-use permits a bounded inspection window while programmatic login stays capped',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'patronus-computer-deadline-'));
+ const engine=new Patronus(root);
+ try {
+  assert.throws(()=>engine.login({account:'x10',timeoutSeconds:301,idempotencyKey:'long-programmatic'}),{code:'LOGIN_TIMEOUT_POLICY'});
+  assert.throws(()=>engine.login({account:'x10',interaction:'computer-use',timeoutSeconds:901,idempotencyKey:'too-long-computer'}),{code:'LOGIN_TIMEOUT_POLICY'});
+  const job=engine.login({account:'x10',interaction:'computer-use',timeoutSeconds:900,idempotencyKey:'bounded-computer'});
+  assert.equal(engine.get(job.jobId).args.timeoutSeconds,900);
+  assert.equal(engine.status({jobId:job.jobId}).state,'queued');
+  engine.cancel({jobId:job.jobId});
+ }finally {await engine.close();rmSync(root,{recursive:true,force:true});}
 });
 
 test('computer-use sessions forbid credential actions during a session-only probe',async()=>{
