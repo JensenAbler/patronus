@@ -9,6 +9,7 @@ import { chromium } from 'playwright';
 import { request, safeURL, displayURL, fault, startProxy, resolvePublic, agent } from './network.js';
 import { extract } from './extract.js';
 import { browserError } from './browser-errors.js';
+import { addWarning, requestWarning, mainNavigation, networkReason } from './warnings.js';
 import { browserRequestPolicy, blockedRequest, continueBrowserRequest } from './browser-policy.js';
 import { trackRequests, waitForReadiness } from './readiness.js';
 import { x10Login, X10_LOGIN, diagnoseX10Error } from './login.js';
@@ -31,7 +32,7 @@ export class Patronus {
  save(d){this.db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify(d),d.jobId);}
  get(id){const r=this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);if(!r)throw fault('NOT_FOUND');return {args:JSON.parse(r.input),data:JSON.parse(r.data)};}
  status({jobId}){return this.get(jobId).data;}
- capabilities(){return {name:'Patronus',version:'0.4.2',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
+ capabilities(){return {name:'Patronus',version:'0.4.3',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'}};}
  login({account,timeoutSeconds=180,idempotencyKey,solveCaptchas=true,sessionOnly=false,headed=false,screenshots=false,interaction='programmatic'}){
   if(account!=='x10')throw fault('ACCOUNT_UNSUPPORTED');
   // Recovering an existing key is read-only; a fresh submission must respect X10's own cooldown.
@@ -81,7 +82,7 @@ export class Patronus {
   if(existing){if(existing.input!==input)throw fault('IDEMPOTENCY_CONFLICT');return JSON.parse(existing.data);}
   const pending=this.db.prepare('SELECT data FROM jobs').all().filter(r=>!terminal.has(JSON.parse(r.data).state)).length;
   if(pending>=50)throw fault('QUEUE_FULL');
-  const d={jobId:randomUUID(),state:'queued',createdAt:now(),startedAt:null,finishedAt:null,mode:args.mode,profile:args.profile,urls:args.urls.map(displayURL),pages:[],artifacts:[],obstacles:[],trace:[],bytes:0};
+  const d={jobId:randomUUID(),state:'queued',createdAt:now(),startedAt:null,finishedAt:null,mode:args.mode,profile:args.profile,urls:args.urls.map(displayURL),pages:[],artifacts:[],obstacles:[],warnings:[],trace:[],bytes:0};
   mkdirSync(join(this.root,'jobs',d.jobId),{mode:0o700});
   this.db.prepare('INSERT INTO jobs VALUES(?,?,?,?)').run(d.jobId,args.idempotencyKey,input,JSON.stringify(d));return d;
  }
@@ -170,6 +171,7 @@ export class Patronus {
   mkdirSync(profile,{recursive:true,mode:0o700});
   let observedBytes=0,context,page,response,tracker,stage='launch';
   const diagnosticStart=d.diagnostics?.length||0;
+  const reportedRequests=new WeakSet();
   const challengeState={armed:false};
   const solver=configuredSolver(this,args);
   const proxy=await startProxy({signal,maxBytes:args.maxBytes-d.bytes,onBytes:n=>{d.bytes+=n-observedBytes;observedBytes=n;}});
@@ -191,13 +193,28 @@ export class Patronus {
      await resolvePublic(req.url());
      this.budget(d,args);
      await continueBrowserRequest(route,decision);
-    }catch(e){if(d.obstacles.length<50)d.obstacles.push(blockedRequest(req,e.code||'REQUEST_FAILED'));await route.abort();}
+    }catch(e){
+     reportedRequests.add(req);
+     if(mainNavigation(req,page)||['BYTE_LIMIT','STORAGE_FULL','STORAGE_QUOTA'].includes(e.code)){if(d.obstacles.length<50)d.obstacles.push(blockedRequest(req,e.code||'REQUEST_FAILED'));}
+     else addWarning(d,requestWarning(req,'SUBREQUEST_BLOCKED',browserError(e,'subrequest',signal).code));
+     await route.abort().catch(()=>{});
+    }
    });
    await context.routeWebSocket('**/*',ws=>ws.close());
    page=context.pages()[0]||await context.newPage();
    tracker=trackRequests(page);
    page.on('dialog',dialog=>dialog.dismiss());
-   page.on('response',r=>{if(d.trace.length<200)d.trace.push({at:now(),url:displayURL(r.url()),status:r.status(),client:agent,route:'browser'});});
+   page.on('response',r=>{
+    if(d.trace.length<200)d.trace.push({at:now(),url:displayURL(r.url()),status:r.status(),client:agent,route:'browser'});
+    if(r.status()>=400&&!mainNavigation(r.request(),page)&&!reportedRequests.has(r.request())){
+     reportedRequests.add(r.request());addWarning(d,{...requestWarning(r.request(),'SUBREQUEST_HTTP_ERROR','HTTP_ERROR'),status:r.status()});
+    }
+   });
+   page.on('requestfailed',req=>{
+    if(!signal.aborted&&!mainNavigation(req,page)&&!reportedRequests.has(req)){
+     reportedRequests.add(req);addWarning(d,requestWarning(req,'SUBREQUEST_FAILED',networkReason(req.failure()?.errorText)));
+    }
+   });
    page.on('download',download=>download.cancel());
    stage='navigation';
    page.on('response',r=>{if(r.request().isNavigationRequest()&&r.frame()===page.mainFrame())response=r;});
@@ -209,7 +226,11 @@ export class Patronus {
     readiness=await waitForReadiness(page,tracker,{timeoutMs:(args.browserWaitSeconds??20)*1000,minWaitMs:5000,selector:args.waitForSelector,signal});
    }
    tracker.close();
-   if(readiness.outcome==='timeout')d.obstacles.push({code:'PAGE_NOT_SETTLED',url:displayURL(page.url()),message:'Readiness budget expired; captured available content.',...readiness});
+   if(readiness.outcome==='timeout'){
+    const item={code:'PAGE_NOT_SETTLED',url:displayURL(page.url()),message:'Readiness budget expired; captured available content.',...readiness};
+    if(args.waitForSelector&&!readiness.selectorMatched)d.obstacles.push({...item,code:'REQUESTED_SELECTOR_NOT_FOUND'});
+    else addWarning(d,item);
+   }
    const code=response?.status()||0;
    if(code>=400){await this.browserFailure(page,response,d,args,'HTTP_ERROR');throw fault(code===401?'AUTH_REQUIRED':code===403?'ACCESS_DENIED':code===402?'PAYMENT_REQUIRED':code===429?'RATE_LIMIT':'HTTP_ERROR','HTTP '+code);}
    stage='extraction';
@@ -305,7 +326,8 @@ export class Patronus {
       }
       if(args.mode==='explore')for(const link of out.links||[])if(new URL(link.url).origin===new URL(raw).origin&&!seen.has(link.url)&&pending.length<args.maxPages)pending.push(link.url);
       out.links=(out.links||[]).map(l=>({...l,url:displayURL(l.url)}));out.images=(out.images||[]).map(i=>({...i,url:displayURL(i.url)}));
-      if(out.images.some(i=>!i.artifactId)||out.coverage.textTruncated||out.coverage.iframes||out.coverage.possibleLoginPage)d.obstacles.push({code:'COVERAGE_LIMIT',url:displayURL(raw),message:'See result coverage and image retrieval status.'});
+      if(out.coverage.textTruncated)d.obstacles.push({code:'COVERAGE_LIMIT',url:displayURL(raw),message:'Extracted text was truncated; inspect coverage.'});
+      if(out.images.some(i=>!i.artifactId)||out.coverage.framesOmitted||out.coverage.frameErrors||out.coverage.possibleLoginPage)addWarning(d,{code:'COVERAGE_WARNING',url:displayURL(raw),message:'Some auxiliary coverage is missing or the page contains a password field. Inspect content and coverage before deciding whether the objective is blocked.'});
      }
      output.push(out);d.pages.push({url:out.url,title:out.title||'',route:out.route});
     }catch(e){d.obstacles.push({url:displayURL(raw),code:controller.signal.aborted?(controller.signal.reason.code||'CANCELLED'):(e.code||'RETRIEVAL_ERROR'),message:e.code&&/^[A-Z_]+$/.test(e.code)?e.message.slice(0,160):'Retrieval failed; no credentials or untrusted exception text exposed.'});}
@@ -313,7 +335,11 @@ export class Patronus {
    }
    d.state=controller.signal.aborted?(controller.signal.reason.code==='CANCELLED'?'cancelled':output.length?'partial':'failed'):d.obstacles.length?(output.length?'partial':'failed'):'succeeded';
   }catch(e){d.state=e.code==='CANCELLED'?'cancelled':output.length?'partial':'failed';d.obstacles.push({code:e.code||'RETRIEVAL_ERROR',message:'Run ended before all requested content was retrieved.'});}
-  finally{clearTimeout(timer);d.finishedAt=now();persist();this.active=null;}
+  finally{
+   clearTimeout(timer);d.finishedAt=now();
+   d.outcome={contentCaptured:output.length>0,capturedPages:output.length,attemptedPages:seen.size,blockingIssues:d.obstacles.length,warningCount:(d.warnings?.length||0)+(d.warningsOmitted||0),scope:'Document retrieval only; verify the requested objective against returned content. Background warnings do not establish task failure.'};
+   persist();this.active=null;
+  }
  }
  async close(){if(this.active){this.active.controller.abort(fault('INTERRUPTED'));while(this.active)await new Promise(r=>setTimeout(r,20));}this.db.close();}
 }

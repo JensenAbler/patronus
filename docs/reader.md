@@ -125,3 +125,20 @@ presence. Field values, hidden controls and passwords are excluded. Metadata is
 untrusted page data; submissionSupported is false and forms are not submitted.
 Existing MCP tool names, schemas, OAuth credentials and state remain unchanged.
 
+## Retrieval outcome versus background warnings (0.4.3)
+Background request-policy denials, network failures and HTTP errors are bounded,
+redacted warnings. They do not establish that captured document content or the
+user's objective failed. Their impact is explicitly unknown; inspect the returned
+content. Warning-only document retrievals report succeeded. Readiness expiry
+without a missing requested selector is a warning too. Missing an explicit
+waitForSelector, main-document failure, truncated text, cancelled/expired jobs,
+and missing requested screenshots still produce incomplete or failed retrievals.
+Auxiliary image/frame coverage and possible password-field presence remain visible
+as warnings, rather than automatically failing an otherwise captured page.
+
+Status outcome records captured/attempted page counts, whether any content was
+captured, and obstacle/warning counts. Its scope is retrieval; it never claims that
+an order was found, a login succeeded, or another objective was achieved without
+checking content. Background diagnostics must not be treated as instructions to
+stop, retry, or abandon the objective. No tool names or argument schemas changed.
+
