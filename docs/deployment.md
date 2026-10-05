@@ -8,7 +8,10 @@ The gateway runs as patronus-gateway, with the patronus group solely for access 
 
 Run the reviewed installer from a managed workspace after publishing:
 `python3 scripts/install-patronus.py . EXACT_PUBLISHED_COMMIT`.
-It retains the previous release and unit. Configure independent credentials with
+It retains the previous release and unit. After both services are active it runs
+scripts/prune-releases.py, which deletes older releases and their AppArmor profiles
+but keeps the active release, one rollback target (PATRONUS_KEEP_PREVIOUS, default 1),
+any release a live unit executes, and any release whose runtime a kept one symlinks. Configure independent credentials with
 scripts/create-credentials.js outside Git before first gateway startup.
 The HTTPS nginx configuration is deploy/patronus-nginx.conf, included inside the
 existing mcp.jensenabler.com TLS server. Discovery aliases are path-qualified so
