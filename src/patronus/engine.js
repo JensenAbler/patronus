@@ -1,5 +1,6 @@
 import { computerLogin } from './computer-login.js';
 import { DesktopControl } from './desktop-control.js';
+import { startDesktopCaptcha } from './desktop-captcha.js';
 import { readX10Credentials } from './login.js';
 import { readFileSync as readFileRaw, lstatSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -110,7 +111,11 @@ export class Patronus {
   try{
    const c=this.control();
    const {action}=args;let result={};
-   if(action==='click'){
+   if(this.desktopSolves?.size&&!['screenshot','wait','solveCaptcha'].includes(action))throw fault('DESKTOP_SOLVER_BUSY','Cancel the active CAPTCHA job before changing the desktop.');
+   if(['click','scroll','type','key','navigate'].includes(action))this.desktopCapture=null;
+   if(action==='solveCaptcha'){
+    const job=await startDesktopCaptcha(this,args);result={jobId:job.jobId,solverState:job.state};
+   }else if(action==='click'){
     if(!Number.isInteger(args.x)||!Number.isInteger(args.y))throw fault('DESKTOP_COORDINATE_POLICY');
     result=await c.click({x:args.x,y:args.y,button:args.button||'left',count:args.count||1});
    }else if(action==='scroll'){
@@ -131,7 +136,9 @@ export class Patronus {
    if(action!=='screenshot'&&action!=='wait')await new Promise(r=>setTimeout(r,400));
    const frame=await c.screenshot();
    if(frame.length>4194304)throw fault('DESKTOP_SCREENSHOT_LIMIT');
-   return {...result,action,screenshot:frame.toString('base64'),screenshotMimeType:'image/jpeg',viewport:{width:c.view.width,height:c.view.height},desktop:this.desktop.status()};
+   const screenshotSha256=digest(frame),desktop=this.desktop.status();
+   this.desktopCapture={frame,sha256:screenshotSha256,at:Date.now(),desktopStartedAt:desktop.startedAt};
+   return {...result,action,screenshot:frame.toString('base64'),screenshotSha256,screenshotMimeType:'image/jpeg',viewport:{width:c.view.width,height:c.view.height},desktop};
   }catch(e){
    if(/^[A-Z][A-Z0-9_]+$/.test(e.code||''))throw e;
    throw fault('DESKTOP_ACTION_FAILED');
@@ -154,7 +161,7 @@ export class Patronus {
   this.db.prepare('INSERT INTO jobs VALUES(?,?,?,?)').run(d.jobId,args.idempotencyKey,input,JSON.stringify(d));return d;
  }
  list({cursor=0,limit=20}){const rows=this.db.prepare('SELECT data FROM jobs ORDER BY rowid DESC LIMIT ? OFFSET ?').all(limit+1,cursor);const more=rows.length>limit;return {jobs:rows.slice(0,limit).map(r=>JSON.parse(r.data)),nextCursor:more?cursor+limit:null};}
- cancel({jobId}){const {data:d}=this.get(jobId);if(terminal.has(d.state))return d;if(this.active?.id===jobId)this.active.controller.abort(fault('CANCELLED'));else{d.state='cancelled';d.finishedAt=now();this.save(d);}return this.status({jobId});}
+ cancel({jobId}){const {data:d}=this.get(jobId);if(terminal.has(d.state))return d;if(this.desktopSolves?.has(jobId))this.desktopSolves.get(jobId).controller.abort(fault('CANCELLED'));else if(this.active?.id===jobId)this.active.controller.abort(fault('CANCELLED'));else{d.state='cancelled';d.finishedAt=now();this.save(d);}return this.status({jobId});}
  result({jobId,cursor=0,limit=16000}){this.get(jobId);const path=join(this.root,'jobs',jobId,'result.json');const content=existsSync(path)?readFileSync(path,'utf8'):'[]';return {content:content.slice(cursor,cursor+limit),nextCursor:cursor+limit<content.length?cursor+limit:null,untrustedContent:true};}
  artifact({jobId,artifactId,cursor=0,limit=16000}){
   const a=this.get(jobId).data.artifacts.find(a=>a.artifactId===artifactId);if(!a)throw fault('NOT_FOUND');
@@ -408,5 +415,5 @@ export class Patronus {
    persist();this.active=null;
   }
  }
- async close(){if(this.active){this.active.controller.abort(fault('INTERRUPTED'));while(this.active)await new Promise(r=>setTimeout(r,20));}this.db.close();}
+ async close(){for(const task of this.desktopSolves?.values()||[])task.controller.abort(fault('INTERRUPTED'));await Promise.allSettled([...this.desktopSolves?.values()||[]].map(task=>task.promise));if(this.active){this.active.controller.abort(fault('INTERRUPTED'));while(this.active)await new Promise(r=>setTimeout(r,20));}this.db.close();}
 }
