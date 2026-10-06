@@ -34,19 +34,41 @@ function cancelled(signal) {
 
 export function parseCoordinates(answer, width, height) {
   if (!validDimensions(width, height)) throw fault('SOLVER_CHALLENGE_UNSUPPORTED');
-  // Match the entire provider answer, not just coordinates embedded in junk.
-  if (typeof answer !== 'string' || answer.length > 1024 || answer.trim() !== answer ||
-      !/^coordinate:x=\d{1,3},y=\d{1,3}(?:;x=\d{1,3},y=\d{1,3})*$/.test(answer)) {
-    throw fault('SOLVER_RESPONSE_INVALID');
+  let entries;
+  if (Array.isArray(answer)) {
+    // JSON mode may return coordinate objects instead of the documented text.
+    entries = answer;
+  } else {
+    // Match the entire provider answer, not just coordinates embedded in junk.
+    if (typeof answer !== 'string' || answer.length > 1024 || answer.trim() !== answer ||
+        !/^coordinate:x=\d{1,3},y=\d{1,3}(?:;x=\d{1,3},y=\d{1,3})*$/.test(answer)) {
+      throw fault('SOLVER_RESPONSE_INVALID');
+    }
+    entries = answer.slice('coordinate:'.length).split(';').map(part => {
+      const [, x, y] = /^x=(\d{1,3}),y=(\d{1,3})$/.exec(part);
+      return { x, y };
+    });
   }
-  const parts = answer.slice('coordinate:'.length).split(';');
-  if (parts.length > coordinateLimits.maxPoints) throw fault('SOLVER_RESPONSE_INVALID');
-  return parts.map(part => {
-    const [, xText, yText] = /^x=(\d{1,3}),y=(\d{1,3})$/.exec(part);
-    const x = Number(xText), y = Number(yText);
-    if (x >= width || y >= height) throw fault('SOLVER_RESPONSE_INVALID');
-    return { x, y };
-  });
+  if (entries.length < 1 || entries.length > coordinateLimits.maxPoints) throw fault('SOLVER_RESPONSE_INVALID');
+  const points = [];
+  // Iteration also rejects sparse arrays; map would silently preserve their holes.
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
+        ![Object.prototype, null].includes(Object.getPrototypeOf(entry)) ||
+        Reflect.ownKeys(entry).length !== 2 ||
+        !Object.hasOwn(entry, 'x') || !Object.hasOwn(entry, 'y')) {
+      throw fault('SOLVER_RESPONSE_INVALID');
+    }
+    const values = [entry.x, entry.y].map(value => {
+      if (typeof value === 'string' && value.trim() === value && /^\d{1,3}$/.test(value)) return Number(value);
+      if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+      throw fault('SOLVER_RESPONSE_INVALID');
+    });
+    const [x, y] = values;
+    if (x < 0 || y < 0 || x >= width || y >= height) throw fault('SOLVER_RESPONSE_INVALID');
+    points.push({ x, y });
+  }
+  return points;
 }
 
 export async function solveCoordinates({

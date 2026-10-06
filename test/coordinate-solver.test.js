@@ -68,6 +68,51 @@ test('coordinate parser accepts origin and last image pixel, maintaining click o
   assert.equal(parseCoordinates('coordinate:' + Array(25).fill('x=1,y=2').join(';'), 600, 600).length, 25);
 });
 
+test('observed JSON coordinate-object response parses and completes the solver flow', async () => {
+  const request = [
+    { x: '136', y: '218' }, { x: '55', y: '146' },
+    { x: '219', y: '131' }, { x: '215', y: '217' }
+  ];
+  const expected = [{ x: 136, y: 218 }, { x: 55, y: 146 }, { x: 219, y: 131 }, { x: 215, y: 217 }];
+  assert.deepEqual(parseCoordinates(request, 300, 300), expected);
+  const records = [], calls = [];
+  assert.deepEqual(await solveCoordinates(options({
+    height: 300, record: value => records.push(value),
+    transport: async path => { calls.push(path); return path === '/in.php' ? task : { status: 1, request }; }
+  })), expected);
+  assert.deepEqual(calls, ['/in.php', '/res.php']);
+  assert.deepEqual(records.at(-1), { state: 'solved', taskId: '12345', type: 'coordinates' });
+  assert.equal(JSON.stringify(records).includes(JSON.stringify(request)), false);
+});
+
+test('coordinate-object arrays accept integers and digit strings, preserve order, and leave inputs unchanged', () => {
+  const entries = Object.freeze([
+    Object.freeze({ x: 0, y: '0' }), Object.freeze({ x: '599', y: 599 }),
+    Object.freeze({ x: 1, y: '002' })
+  ]);
+  assert.deepEqual(parseCoordinates(entries, 600, 600), [{ x: 0, y: 0 }, { x: 599, y: 599 }, { x: 1, y: 2 }]);
+  assert.equal(parseCoordinates(Array.from({ length: 25 }, () => ({ x: 1, y: 2 })), 600, 600).length, 25);
+});
+
+test('coordinate-object arrays reject malformed values, extra keys, sparse entries, and invalid bounds', () => {
+  const invalid = [
+    [], Array.from({ length: 26 }, () => ({ x: 1, y: 2 })), Array(1),
+    [null], [[]], ['coordinate:x=1,y=2'], [{}], [{ x: 1 }], [{ y: 2 }],
+    [{ x: 1, y: 2, extra: 'untrusted' }], [{ x: 1, y: 2, [Symbol('extra')]: true }],
+    [Object.create({ x: 1, y: 2 })], [{ x: -1, y: 2 }], [{ x: 1, y: -1 }],
+    [{ x: 300, y: 2 }], [{ x: 1, y: 200 }], [{ x: '300', y: '2' }],
+    [{ x: 1.5, y: 2 }], [{ x: Infinity, y: 2 }], [{ x: NaN, y: 2 }],
+    [{ x: null, y: 2 }], [{ x: true, y: 2 }], [{ x: 1n, y: 2 }],
+    [{ x: {}, y: 2 }], [{ x: [1], y: 2 }]
+  ];
+  for (const x of ['', ' 1', '1 ', '1\n', '-1', '+1', '1.0', '1e2', '0x10', 'NaN', 'Infinity', '1000']) {
+    invalid.push([{ x, y: '2' }]);
+  }
+  for (const answer of invalid) {
+    assert.throws(() => parseCoordinates(answer, 300, 200), { code: 'SOLVER_RESPONSE_INVALID' });
+  }
+});
+
 test('coordinate parser rejects malformed, partially valid, excessive and out-of-bounds answers', () => {
   for (const answer of [
     undefined, null, [], {}, 12, '', 'coordinate:', 'x=1,y=2', 'OK|coordinate:x=1,y=2',
