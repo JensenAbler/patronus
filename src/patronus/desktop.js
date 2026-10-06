@@ -1,7 +1,23 @@
 import { spawn as nodeSpawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { startProxy as defaultProxy, fault } from './network.js';
+
+// Chrome records an unclean exit in its profile and then shows a "Restore pages?"
+// bubble over every page. Marking the last exit clean before launch keeps the
+// window as a person would leave it. Failure here never blocks startup.
+export function markCleanExit(profile) {
+  const path = join(profile, 'Default', 'Preferences');
+  try {
+    if (!existsSync(path)) return false;
+    const prefs = JSON.parse(readFileSync(path, 'utf8'));
+    if (prefs?.profile?.exit_type === 'Normal' && prefs.profile.exited_cleanly === true) return false;
+    prefs.profile = { ...(prefs.profile || {}), exit_type: 'Normal', exited_cleanly: true };
+    writeFileSync(path + '.patronus-next', JSON.stringify(prefs), { mode: 0o600 });
+    renameSync(path + '.patronus-next', path);
+    return true;
+  } catch { return false; }
+}
 
 // A persistent, human-first desktop browser: stock Google Chrome on its own virtual
 // display and window manager, with a private profile that keeps logins across restarts.
@@ -89,6 +105,7 @@ export class Desktop {
       const env = { ...this.env, DISPLAY: this.display };
       this.children.windowManager = this.spawn('openbox', ['--sm-disable'], { env, stdio: 'ignore' });
       this.proxy = await this.startProxy({ maxBytes: Infinity, anyPort: true });
+      markCleanExit(this.profile);
       this.children.chrome = this.spawn(this.chrome,
         chromeArgs({ profile: this.profile, proxy: this.proxy.url, screen: this.screen }), { env, stdio: 'ignore' });
       for (const [name, child] of Object.entries(this.children))

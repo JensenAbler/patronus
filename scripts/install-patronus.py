@@ -73,7 +73,9 @@ StateDirectoryMode=0700
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=25
-KillMode=control-group
+# mixed: stop signals only the Node process, which closes Chrome gracefully so it
+# flushes cookies; anything still running after the timeout is then killed.
+KillMode=mixed
 MemoryMax=3G
 TasksMax=1024
 CPUQuota=150%
