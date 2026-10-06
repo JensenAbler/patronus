@@ -1,4 +1,5 @@
 import express from 'express';
+import {typeDesktopText,validHandoffText} from './handoff-input.js';
 import { createHash, randomBytes } from 'node:crypto';
 
 const token = () => randomBytes(32).toString('base64url');
@@ -9,7 +10,7 @@ const KEYS = new Set(['Enter','Tab','Shift+Tab','Escape','Backspace','Delete','A
 const exact = (body, keys) => body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).every(key => keys.includes(key));
 
 /** Ephemeral owner-only control of the existing X11 session. No browser is created. */
-export function createHandoff({baseUrl, call, verifyPassword, now = Date.now, sessionMs = 900000, idleMs = 60000}) {
+export function createHandoff({baseUrl, call, verifyPassword, typeText = typeDesktopText, now = Date.now, sessionMs = 900000, idleMs = 60000}) {
   const base = new URL(baseUrl), path = base.pathname.replace(/\/$/,'') + '/handoff';
   const secure = base.protocol === 'https:';
   const cookieName = secure ? '__Secure-patronus_handoff' : 'patronus_handoff';
@@ -20,7 +21,7 @@ export function createHandoff({baseUrl, call, verifyPassword, now = Date.now, se
   const cookies = req => Object.fromEntries((req.headers.cookie || '').split(';').map(x => x.trim().split('=')));
   const cookie = (res, name, value, maxAge) => res.cookie(name, value, {httpOnly:true, secure, sameSite:'strict', path, maxAge});
   const clearCookie = res => cookie(res, cookieName, '', 0);
-  const release = () => { if (lease) { lease.frame = null; lease = null; } };
+  const release = () => { if (lease) { lease.inputController?.abort(); lease.frame = null; lease = null; } };
   const sweep = () => {
     const time = now();
     if (lease && (lease.expiresAt <= time || lease.lastSeen + idleMs <= time)) release();
@@ -63,12 +64,13 @@ export function createHandoff({baseUrl, call, verifyPassword, now = Date.now, se
     res.set('Content-Security-Policy',res.get('Content-Security-Policy') + "; script-src 'nonce-"+nonce+"'");
     const config = JSON.stringify({path,csrf:s.csrf,...state(s)}).replace(/</g,'\\u003c');
     res.type('html').send(page('Patronus handoff', '<p id="status" role="status">Ready to take control of the same browser on Alpha</p><p id="clock"></p>' +
-      '<div class="controls"><button id="take">Take control</button><button id="refresh" disabled>Refresh</button><button id="done">Done</button></div>' +
+      '<div class="controls"><button id="take">Take control</button><button id="refresh" disabled>Refresh</button><button id="keyboard" class="input" disabled>Keyboard</button><button id="done">Done</button></div>' +
       '<p>Tap the screen to click. Pinch to zoom, or use Full size and pan for small targets. Scroll buttons move the remote page.</p>' +
       '<div class="controls"><button id="zoom">Full size</button><button class="input" data-scroll="-3" disabled>Scroll up</button><button class="input" data-scroll="3" disabled>Scroll down</button></div>' +
       '<div id="screen-wrap"><img id="screen" width="1280" height="720" alt="The private Patronus desktop appears after you take control" draggable="false"></div>' +
       '<div class="controls"><button class="input" data-key="Tab" disabled>Tab</button><button class="input" data-key="Enter" disabled>Enter</button><button class="input" data-key="Backspace" disabled>Backspace</button><button class="input" data-key="Escape" disabled>Escape</button></div>' +
-      '<p>This handoff provides clicks and navigation keys. Enter passwords only in the service’s normal secure sign-in flow. Close this page or tap Done when finished.</p>' +
+      '<div id="typing" hidden><p>First tap the field in the remote browser. Then type here and tap Send text. Text stays hidden and is cleared after sending.</p><label>Text for the selected remote field<input id="remote-text" type="password" inputmode="text" enterkeyhint="done" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="1000" data-lpignore="true" data-1p-ignore></label><button id="send-text" class="input" disabled>Send text</button></div>' +
+      '<p>Keyboard opens your phone’s keyboard. Send text types into the selected remote field; Enter submits only when you press it separately. Close this page or tap Done when finished.</p>' +
       '<script nonce="'+nonce+'">('+handoffClient.toString()+')('+config+')</script>'));
   });
   router.post('/login',origin,async(req,res,next) => {
@@ -105,6 +107,13 @@ export function createHandoff({baseUrl, call, verifyPassword, now = Date.now, se
         const current = await call('patronus_capabilities',{});
         owns(s);
         if (!s.desktopStartedAt || current.desktop?.startedAt !== s.desktopStartedAt) { release(); s.expiresAt=now(); throw fail('DESKTOP_SESSION_CHANGED'); }
+        if (args.action === 'type') {
+          if(current.desktop?.state!=='running')throw fail('DESKTOP_NOT_RUNNING');
+          s.inputController = new AbortController();
+          try { await typeText({text:args.text,display:current.desktop.display,signal:s.inputController.signal}); }
+          finally { delete args.text; s.inputController=null; }
+          owns(s);args.action='screenshot';
+        }
       }
       const result = await call('patronus_desktop',{...args,idempotencyKey:'human-'+token()});
       owns(s);
@@ -122,7 +131,7 @@ export function createHandoff({baseUrl, call, verifyPassword, now = Date.now, se
     try {
       const s = req.handoff, b = req.body; owns(s);
       if (inFlight) throw fail('DESKTOP_BUSY');
-      if (!exact(b,['csrf','action','x','y','dy','key','frameId','sequence'])) throw fail('INVALID_ACTION',400);
+      if (!exact(b,['csrf','action','x','y','dy','key','text','frameId','sequence']) || ('text' in b && b.action !== 'type')) throw fail('INVALID_ACTION',400);
       if (!Number.isSafeInteger(b.sequence) || b.sequence !== s.nextSequence) throw fail('STALE_SEQUENCE');
       if (!s.frame || b.frameId !== s.frame.id || s.frame.at+15000 < now()) throw fail('STALE_FRAME');
       const args = {action:b.action};
@@ -132,6 +141,9 @@ export function createHandoff({baseUrl, call, verifyPassword, now = Date.now, se
       } else if (b.action === 'scroll') {
         if (!Number.isInteger(b.dy) || b.dy === 0 || Math.abs(b.dy)>10) throw fail('INVALID_SCROLL',400);
         Object.assign(args,{x:640,y:360,dy:b.dy});
+      } else if (b.action === 'type') {
+        if (!validHandoffText(b.text)) throw fail('INVALID_TEXT_INPUT',400);
+        args.text=b.text;delete b.text;
       } else if (b.action === 'key') {
         if (!KEYS.has(b.key)) throw fail('INVALID_KEY',400);
         args.key=b.key;
@@ -178,17 +190,19 @@ function page(title,body) {
 function handoffClient(config) {
   const byId=id=>document.getElementById(id);
   const status=byId('status'),screen=byId('screen'),take=byId('take'),refresh=byId('refresh'),done=byId('done');
+  const textInput=byId('remote-text'),typing=byId('typing');
+  const clearText=()=>{textInput.value='';textInput.blur();typing.hidden=true;};
   let active=config.active,busy=false,ended=false,frameId=null,nextSequence=config.nextSequence,renderedAt=0,pointer=null;
   const deadline=Date.parse(config.expiresAt);
   const update=()=>{take.disabled=busy||active||ended;refresh.disabled=busy||!active||ended;document.querySelectorAll('.input').forEach(b=>b.disabled=busy||!active||!frameId||ended);};
   async function request(route,body={}) {
     const response=await fetch(config.path+'/'+route,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Handoff-CSRF':config.csrf},body:JSON.stringify(body)});
     let data;try{data=await response.json();}catch{throw Error('Connection interrupted. Refresh before continuing');}
-    if(!response.ok){if(['CONTROL_NOT_HELD','DESKTOP_SESSION_CHANGED'].includes(data.error))active=false;if(response.status===401){ended=true;active=false;screen.removeAttribute('src');}throw Error(data.error||'Request failed');}
+    if(!response.ok){if(['CONTROL_NOT_HELD','DESKTOP_SESSION_CHANGED'].includes(data.error)){clearText();active=false;}if(response.status===401){clearText();ended=true;active=false;screen.removeAttribute('src');}throw Error(/^HANDOFF_INPUT_/.test(data.error||'')?'Typing may have stopped partway. Inspect the remote field before sending again':data.error||'Request failed');}
     return data;
   }
   function render(data) {
-    if(ended||Date.now()>=deadline||document.hidden){frameId=null;screen.removeAttribute('src');return;}
+    if(ended||Date.now()>=deadline||document.hidden){clearText();frameId=null;screen.removeAttribute('src');return;}
     nextSequence=data.nextSequence;active=data.active;
     if(data.image){screen.src='data:image/jpeg;base64,'+data.image;frameId=data.frameId;renderedAt=Date.now();}
     status.textContent=active?'You have exclusive control. Tap the browser image to click':'Ready to take control';
@@ -200,6 +214,15 @@ function handoffClient(config) {
   const frame=()=>run(async()=>render(await request('frame')));
   take.onclick=()=>run(async()=>{render(await request('take'));render(await request('frame'));});
   refresh.onclick=frame;
+  byId('keyboard').onclick=()=>{if(!active||busy||ended)return;typing.hidden=false;textInput.focus();};
+  async function sendText(){
+    if(busy||ended||!active||!textInput.value)return;
+    if(!frameId||Date.now()-renderedAt>12000){status.textContent='Refresh before sending; your text is still here';return;}
+    const text=textInput.value;textInput.value='';textInput.blur();
+    await action({action:'type',text});
+  }
+  byId('send-text').onclick=sendText;
+  textInput.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();textInput.blur();}});
   async function action(args) {
     if(!active||!frameId||Date.now()-renderedAt>12000){status.textContent='Refresh the screen before clicking';return;}
     await run(async()=>{const id=frameId;frameId=null;render(await request('action',{...args,frameId:id,sequence:nextSequence}));});
@@ -219,15 +242,15 @@ function handoffClient(config) {
   byId('zoom').onclick=()=>{const full=byId('screen-wrap').classList.toggle('full');byId('zoom').textContent=full?'Fit screen':'Full size';};
   done.onclick=async()=>{
     if(ended)return;
-    done.disabled=true;
+    clearText();done.disabled=true;
     try{await request('finish');ended=true;active=false;frameId=null;screen.removeAttribute('src');status.textContent='Handoff ended. You can close this page';}
     catch(e){done.disabled=false;status.textContent='Could not confirm Done. Retry, or close this page; control releases after one minute';}
     update();
   };
-  setInterval(()=>{const seconds=Math.max(0,Math.ceil((deadline-Date.now())/1000));byId('clock').textContent='Session time left: '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');if(!seconds&&!ended){ended=true;active=false;screen.removeAttribute('src');status.textContent='Session expired. Sign in again for a new handoff';update();}},1000);
+  setInterval(()=>{const seconds=Math.max(0,Math.ceil((deadline-Date.now())/1000));byId('clock').textContent='Session time left: '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');if(!seconds&&!ended){clearText();ended=true;active=false;screen.removeAttribute('src');status.textContent='Session expired. Sign in again for a new handoff';update();}},1000);
   setInterval(()=>{if(active&&!busy&&!ended&&!document.hidden)frame();},5000);
-  document.addEventListener('visibilitychange',()=>{if(document.hidden){frameId=null;pointer=null;screen.removeAttribute('src');update();}else if(active&&!ended)frame();});
-  window.addEventListener('pagehide',()=>{const revoke=!ended;ended=true;active=false;frameId=null;screen.removeAttribute('src');update();if(revoke)navigator.sendBeacon(config.path+'/finish',new Blob([JSON.stringify({csrf:config.csrf})],{type:'application/json'}));});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){clearText();frameId=null;pointer=null;screen.removeAttribute('src');update();}else if(active&&!ended)frame();});
+  window.addEventListener('pagehide',()=>{const revoke=!ended;clearText();ended=true;active=false;frameId=null;screen.removeAttribute('src');update();if(revoke)navigator.sendBeacon(config.path+'/finish',new Blob([JSON.stringify({csrf:config.csrf})],{type:'application/json'}));});
   window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
   update();if(active)frame();
 }

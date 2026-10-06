@@ -3,14 +3,15 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import {createHandoff} from '../src/handoff.js';
 
-async function fixture(t,{call,https=false}={}) {
+async function fixture(t,{call,typeText,https=false}={}) {
  const app=express(), server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
  const origin='http://127.0.0.1:'+server.address().port;
  let time=1700000000000;
  const calls=[];
  const handoff=createHandoff({baseUrl:(https?'https://example.test':origin)+'/patronus',now:()=>time,
+   typeText,
    verifyPassword:async password=>password==='fixture-only-password',
-   call:call|| (async(name,args)=>{calls.push({name,args});return {screenshot:'/9j/AA==',screenshotMimeType:'image/jpeg',desktop:{startedAt:'unchanged-desktop'}};})});
+   call:call|| (async(name,args)=>{calls.push({name,args});return {screenshot:'/9j/AA==',screenshotMimeType:'image/jpeg',desktop:{startedAt:'unchanged-desktop',state:'running',display:':77'}};})});
  app.use('/patronus/handoff',handoff.router);
  t.after(async()=>{handoff.close();await new Promise(r=>server.close(r));});
  const browsers=[];
@@ -102,6 +103,27 @@ test('in-flight frame finishing after revoke cannot leak pixels or race agent',a
  await assert.rejects(f.handoff.guard('patronus_desktop',async()=>true),e=>e.code==='DESKTOP_BUSY');
  settle({screenshot:'private-pixels',screenshotMimeType:'image/jpeg',desktop:{startedAt:'same'}});
  const response=await pending;assert.equal(response.status,409);assert.doesNotMatch(await response.text(),/private-pixels/);
+});
+test('private text uses the dedicated stdin helper with one-use action checks',async t=>{
+ const typed=[];const f=await fixture(t,{typeText:async args=>typed.push(args)}),b=f.browser();
+ await b.login();let frame=await take(b);
+ const secret='synthetic-private-value';
+ const args={action:'type',text:secret,sequence:frame.nextSequence,frameId:frame.frameId};
+ const r=await b.post('/action',args);assert.equal(r.status,200);assert.equal((await r.text()).includes(secret),false);
+ assert.equal(typed.length,1);assert.equal(typed[0].text,secret);assert.equal(typed[0].display,':77');
+ assert.equal(f.calls.some(x=>JSON.stringify(x).includes(secret)),false,'text must not reach reader/MCP calls');
+ assert.equal((await b.post('/action',args)).status,409);assert.equal(typed.length,1);
+ frame=await (await b.post('/frame')).json();
+ assert.equal((await b.post('/action',{...args,text:'secret\nsubmit',frameId:frame.frameId,sequence:frame.nextSequence})).status,400);
+ assert.equal(typed.length,1);
+});
+test('Done aborts active typing and no screenshot follows revocation',async t=>{
+ let signal,complete;const f=await fixture(t,{typeText:args=>{signal=args.signal;return new Promise(r=>complete=r);}}),b=f.browser();
+ await b.login();const frame=await take(b);
+ const pending=b.post('/action',{action:'type',text:'synthetic-only',sequence:frame.nextSequence,frameId:frame.frameId});
+ while(!signal)await new Promise(r=>setTimeout(r,2));
+ await b.post('/finish');assert.equal(signal.aborted,true);complete();
+ assert.equal((await pending).status,409);assert.equal(f.calls.filter(x=>x.name==='patronus_desktop').length,1);
 });
 test('changed desktop identity is detected before any click is sent',async t=>{
  const calls=[];const f=await fixture(t,{call:async(name,args)=>{calls.push({name,args});return {screenshot:'a',screenshotMimeType:'image/jpeg',desktop:{startedAt:name==='patronus_capabilities'?'restarted':'original'}};}}),b=f.browser();

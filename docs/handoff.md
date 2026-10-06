@@ -9,9 +9,17 @@ SameSite=Strict host-only cookie identifies an in-memory session, with a hard
 input are never logged or stored by this feature. No bearer token appears in a URL.
 
 Take control grants a single exclusive lease. The page refreshes X11 screenshots
-and maps touch coordinates onto the existing desktop. Allowed inputs are click,
-scroll and a fixed set of navigation keys. There is no credential-reference API,
-text entry, arbitrary tool forwarding, new browser, CDP, VNC or public port.
+and maps touch coordinates onto the existing desktop. Inputs include click,
+scroll, fixed navigation keys and explicit owner-entered text. Keyboard focuses a
+native masked phone input; Send text types into the selected remote field. Text
+is sent only on explicit Send, never recorded or echoed, and is cleared on send,
+Done, expiry, backgrounding and control loss. Printable text is limited to 1000
+UTF-16 units, with control characters and unpaired surrogates rejected unchanged.
+The gateway writes text to xdotool stdin, not argv, using its existing local X11
+access. Its exclusive lease/inFlight lock covers this direct input; it does not
+use reader-side desktopBusy/solver gating. No agent should drive the privileged
+socket during handoff. There is no credential-reference API, arbitrary tool
+forwarding, new browser, CDP, VNC or public port.
 
 The gateway blocks all MCP desktop calls while the human owns the lease. Direct
 root/Unix-socket operational access remains privileged and must not be used to
@@ -28,9 +36,12 @@ background revalidates; page-history restoration reloads the authenticated page.
 
 Before input the gateway checks the current reader-reported desktop identity.
 If Chrome restarted since the displayed frame, input is rejected. Because this
-release deliberately preserves the running reader, that check and input are two
-Unix-socket calls; a crash exactly between them is a residual race. The reader
-continues to serialize actions, and the post-action frame checks identity again.
+release deliberately preserves the running reader, that check and input are
+separate operations (Unix-socket input for clicks/keys, local xdotool stdin for
+text); a crash exactly between them is a residual race. The gateway serializes
+all handoff actions, and the post-action frame checks identity again. Interrupted
+text may have typed a prefix; the owner must inspect the remote field before
+resending. The text child remains under the gateway lock until its close event.
 
 For this gateway-only change, use scripts/install-handoff-gateway.py with the
 reviewed, published source tree, exact new commit and expected current gateway
