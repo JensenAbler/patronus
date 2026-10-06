@@ -1,4 +1,7 @@
 import { computerLogin } from './computer-login.js';
+import { DesktopControl } from './desktop-control.js';
+import { readX10Credentials } from './login.js';
+import { readFileSync as readFileRaw, lstatSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, statfsSync, statSync, openSync, readSync, closeSync, createWriteStream, readdirSync, unlinkSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,6 +23,7 @@ const digest=b=>createHash('sha256').update(b).digest('hex');
 export class Patronus {
  constructor(root,{launch=defaultLaunch,requestFn=request}={}) {
   this.root=root;this.launch=launch;this.request=requestFn;this.active=null;this.computerSessions=new Map();this.computerLogin=computerLogin;
+  this.desktop=null;this.desktopControl=null;this.desktopBusy=false;
   for(const p of ['jobs','profiles','firefox-profiles'])mkdirSync(join(root,p),{recursive:true,mode:0o700});
   this.db=new DatabaseSync(join(root,'jobs.sqlite'));
   this.db.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, key TEXT UNIQUE, input TEXT, data TEXT);");
@@ -72,6 +76,66 @@ export class Patronus {
    receipt.state='failed';receipt.code=/^[A-Z][A-Z0-9_]+$/.test(e.code||'')?e.code:'COMPUTER_ACTION_FAILED';
    this.save(d);throw fault(receipt.code);
   }finally {session.busy=false;}
+ }
+
+ // --- Persistent human-first desktop browser ---------------------------------
+ // One always-on Chrome, shared across calls. Unlike retrieval jobs it has no
+ // per-call lifecycle: the session is the running browser, and the saved profile
+ // carries logins between calls. Access is serialized so two actions never race
+ // the same keyboard.
+ readDesktopSecret(reference){
+  if(reference==='x10-email'||reference==='x10-password'){
+   const {email,password}=readX10Credentials(this.root);
+   return reference==='x10-email'?email:password;
+  }
+  if(reference==='directadmin-password'){
+   const path=join(this.root,'accounts','directadmin.json');
+   let st;try{st=lstatSync(path);}catch{throw fault('CREDENTIAL_MISSING');}
+   if(!st.isFile()||st.isSymbolicLink()||(st.mode&0o077)||st.size>16384)throw fault('CREDENTIAL_FILE_POLICY');
+   let value;try{value=JSON.parse(readFileRaw(path,'utf8'));}catch{throw fault('CREDENTIAL_INVALID');}
+   if(typeof value.password!=='string'||!value.password)throw fault('CREDENTIAL_INVALID');
+   return value.password;
+  }
+  throw fault('CREDENTIAL_UNKNOWN');
+ }
+ control(){
+  if(!this.desktop)throw fault('DESKTOP_DISABLED','The persistent desktop browser is not enabled on this service.');
+  if(!this.desktop.healthy())throw fault('DESKTOP_NOT_RUNNING','The desktop browser is starting or recovering; retry shortly.');
+  if(!this.desktopControl||this.desktopControl.desktop!==this.desktop)this.desktopControl=new DesktopControl(this.desktop);
+  return this.desktopControl;
+ }
+ async desktopAction(args){
+  if(this.desktopBusy)throw fault('DESKTOP_BUSY','Another desktop action is in progress.');
+  this.desktopBusy=true;
+  try{
+   const c=this.control();
+   const {action}=args;let result={};
+   if(action==='click'){
+    if(!Number.isInteger(args.x)||!Number.isInteger(args.y))throw fault('DESKTOP_COORDINATE_POLICY');
+    result=await c.click({x:args.x,y:args.y,button:args.button||'left',count:args.count||1});
+   }else if(action==='scroll'){
+    result=await c.scroll({x:args.x,y:args.y,dx:args.dx||0,dy:args.dy||0});
+   }else if(action==='type'){
+    if(args.credential){const secret=this.readDesktopSecret(args.credential);try{result=await c.typeSecret(secret);}finally{/* secret goes out of scope */}}
+    else if(typeof args.text==='string'){result=await c.type(args.text);}
+    else throw fault('DESKTOP_TYPE_POLICY','Provide text or a credential reference.');
+   }else if(action==='key'){
+    result=await c.pressKey(args.key);
+   }else if(action==='navigate'){
+    if(!args.url)throw fault('DESKTOP_NAVIGATE_POLICY');
+    result=await c.navigate(args.url);
+   }else if(action==='wait'){
+    await new Promise(r=>setTimeout(r,1500));result={waited:true};
+   }else if(action!=='screenshot')throw fault('DESKTOP_ACTION_POLICY');
+   // Let the page settle, then always return a fresh view.
+   if(action!=='screenshot'&&action!=='wait')await new Promise(r=>setTimeout(r,400));
+   const frame=await c.screenshot();
+   if(frame.length>4194304)throw fault('DESKTOP_SCREENSHOT_LIMIT');
+   return {...result,action,screenshot:frame.toString('base64'),screenshotMimeType:'image/jpeg',viewport:{width:c.view.width,height:c.view.height},desktop:this.desktop.status()};
+  }catch(e){
+   if(/^[A-Z][A-Z0-9_]+$/.test(e.code||''))throw e;
+   throw fault('DESKTOP_ACTION_FAILED');
+  }finally{this.desktopBusy=false;}
  }
  start(args){
   for(const u of args.urls)safeURL(u);

@@ -38,7 +38,15 @@ export async function createApp(config) {
    const requestId=randomUUID();let data;
    try {data={ok:true,requestId,...await (config.call||patronusCall)(name,tool.schema.parse(args))};}
    catch(e){data={ok:false,requestId,error:{code:/^[A-Z_]+$/.test(e.code||'')?e.code:'PATRONUS_ERROR',message:'Operation failed. Recover the existing job before retrying.'}};}
-   return {content:[{type:'text',text:JSON.stringify(data)}],structuredContent:data,...(!data.ok?{isError:true}:{})};
+   // A desktop screenshot rides back as a real MCP image block so Claude, ChatGPT
+   // and the app can all see it. The heavy base64 is removed from the text copy.
+   const content=[];
+   if(data.ok&&typeof data.screenshot==='string'){
+    content.push({type:'image',data:data.screenshot,mimeType:data.screenshotMimeType||'image/jpeg'});
+    const {screenshot,screenshotMimeType,...rest}=data;data={...rest,screenshot:'[returned as image]'};
+   }
+   content.push({type:'text',text:JSON.stringify(data)});
+   return {content,structuredContent:data,...(!data.ok?{isError:true}:{})};
   });
   return server;
  },{legacy:'stateless',onerror:()=>console.error('patronus_mcp_protocol_error')});

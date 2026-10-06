@@ -12,7 +12,7 @@ import { patronusCall } from '../src/patronus/client.js';
 import { createApp } from '../src/gateway.js';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
-async function fixture(t, { integrated = false, codingEnabled = false } = {}) {
+async function fixture(t, { integrated = false, codingEnabled = false, call } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'patronus-auth-test-'));
   const { privateKey } = await generateKeyPair('RS256', { extractable: true });
   const jwk = { ...await exportJWK(privateKey), kid: 'test-key', use: 'sig', alg: 'RS256' };
@@ -33,7 +33,7 @@ async function fixture(t, { integrated = false, codingEnabled = false } = {}) {
   const options = { issuer, resourceUrl: resource, passwordHash, jwks: { keys: [jwk] }, cookieKeys: ['fixture-cookie-signing-key-that-is-very-long'], dataDirectory: directory, allowLoopback: true, codingEnabled };
   if (integrated) {
     reader=await serve({root:join(directory,'reader'),socket:join(directory,'reader.sock')});
-    service = await createApp({call:(action,args)=>patronusCall(action,args,{socket:join(directory,'reader.sock')}), baseUrl: `${origin}${prefix}`, dataDirectory: directory, allowLoopback: true, auth: options });
+    service = await createApp({call:call||((action,args)=>patronusCall(action,args,{socket:join(directory,'reader.sock')})), baseUrl: `${origin}${prefix}`, dataDirectory: directory, allowLoopback: true, auth: options });
     auth = service.auth;
   } else auth = await createAuth(options);
   t.after(async () => { await new Promise((resolve) => server.close(resolve)); if (service) await service.close(); else auth.close(); if(reader)await reader.close(); await rm(directory, { recursive: true, force: true }); });
@@ -202,9 +202,14 @@ test('Patronus endpoint publishes discovery aliases and serves MCP only after re
     const capabilities = await client.callTool({ name: 'patronus_capabilities', arguments: {} });
     assert.equal(capabilities.structuredContent.ok, true);
     assert.equal(capabilities.structuredContent.name, 'Patronus');
-    assert.equal(listed.tools.length,9);
+    assert.equal(listed.tools.length,10);
     assert.ok(listed.tools.some(t=>t.name==='patronus_login_action'));
+    assert.ok(listed.tools.some(t=>t.name==='patronus_desktop'));
     assert.ok(listed.tools.every(tool=>tool.name.startsWith('patronus_')));
+    // The desktop is not enabled in this fixture, so the tool reports that plainly.
+    const desktopOff=await client.callTool({name:'patronus_desktop',arguments:{action:'screenshot',idempotencyKey:'desktop-disabled-probe'}});
+    assert.equal(desktopOff.structuredContent.ok,false);
+    assert.equal(desktopOff.structuredContent.error.code,'DESKTOP_DISABLED');
     const denied=await client.callTool({name:'patronus_start',arguments:{urls:['http://127.0.0.1/private'],rendering:'http',idempotencyKey:'private-address-denied'}});
     assert.equal(denied.structuredContent.ok,true);
     let final;
@@ -247,5 +252,32 @@ test('real browser follows consent redirect and completes authenticated MCP', { 
     await client.connect(new StreamableHTTPClientTransport(new URL(f.resource), { requestInit: { headers: { Authorization: 'Bearer ' + token.access_token } } }));
     assert.ok((await client.listTools()).tools.some(t=>t.name==='patronus_login_action'));
     assert.equal((await client.callTool({ name: 'patronus_capabilities', arguments: {} })).structuredContent.ok, true);
+  } finally { await client.close(); }
+});
+
+test('a desktop screenshot comes back as an MCP image block, with base64 stripped from text', async (t) => {
+  const png = Buffer.from('\xff\xd8\xfftiny-jpeg-bytes', 'binary').toString('base64');
+  const f = await fixture(t, { integrated: true, call: async (name, args) => {
+    if (name !== 'patronus_desktop') return { name: 'Patronus', version: '0.5.0' };
+    return { action: args.action, screenshot: png, screenshotMimeType: 'image/jpeg', clicked: { x: 3, y: 4 } };
+  }});
+  const registration = await f.register();
+  const grant = await f.flow(registration, { scope: 'patronus:read offline_access' });
+  const token = await (await f.exchange(registration, grant)).json();
+  const client = new Client({ name: 'image-probe', version: '1.0.0' });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(f.resource), { requestInit: { headers: { Authorization: 'Bearer ' + token.access_token } } }));
+    const shot = await client.callTool({ name: 'patronus_desktop', arguments: { action: 'screenshot', idempotencyKey: 'image-block-probe-1' } });
+    const image = shot.content.find(c => c.type === 'image');
+    const text = shot.content.find(c => c.type === 'text');
+    assert.ok(image, 'image block present');
+    assert.equal(image.data, png);
+    assert.equal(image.mimeType, 'image/jpeg');
+    assert.ok(!text.text.includes(png), 'base64 not duplicated in text');
+    assert.ok(text.text.includes('[returned as image]'));
+    assert.equal(shot.structuredContent.action, 'screenshot');
+    const caps = await client.callTool({ name: 'patronus_capabilities', arguments: {} });
+    assert.equal(caps.content.length, 1);
+    assert.equal(caps.content[0].type, 'text');
   } finally { await client.close(); }
 });

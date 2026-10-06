@@ -103,6 +103,15 @@ export class DesktopControl {
     return { typed: text.length };
   }
 
+  // Type a saved secret into the focused field. The value is passed to xdotool on
+  // stdin via `type --file -`, so it never appears in argv (invisible to ps) and no
+  // caller ever receives it back.
+  async typeSecret(secret) {
+    if (typeof secret !== 'string' || !secret.length || secret.length > 2000 || !TYPEABLE.test(secret)) throw fault('DESKTOP_CREDENTIAL_INVALID');
+    await run(this.inputCmd, ['type', '--clearmodifiers', '--delay', '70', '--file', '-'], { display: this.display, input: secret });
+    return { typed: 'credential' };
+  }
+
   async pressKey(key) {
     const mapped = KEYMAP[key];
     if (!mapped) throw fault('DESKTOP_KEY_POLICY');
