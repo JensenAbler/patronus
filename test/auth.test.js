@@ -12,7 +12,7 @@ import { patronusCall } from '../src/patronus/client.js';
 import { createApp } from '../src/gateway.js';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
-async function fixture(t, { integrated = false, codingEnabled = false, call } = {}) {
+async function fixture(t, { integrated = false, codingEnabled = false, handoffEnabled = false, call } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'patronus-auth-test-'));
   const { privateKey } = await generateKeyPair('RS256', { extractable: true });
   const jwk = { ...await exportJWK(privateKey), kid: 'test-key', use: 'sig', alg: 'RS256' };
@@ -33,7 +33,7 @@ async function fixture(t, { integrated = false, codingEnabled = false, call } = 
   const options = { issuer, resourceUrl: resource, passwordHash, jwks: { keys: [jwk] }, cookieKeys: ['fixture-cookie-signing-key-that-is-very-long'], dataDirectory: directory, allowLoopback: true, codingEnabled };
   if (integrated) {
     reader=await serve({root:join(directory,'reader'),socket:join(directory,'reader.sock')});
-    service = await createApp({call:call||((action,args)=>patronusCall(action,args,{socket:join(directory,'reader.sock')})), baseUrl: `${origin}${prefix}`, dataDirectory: directory, allowLoopback: true, auth: options });
+    service = await createApp({handoffEnabled,call:call||((action,args)=>patronusCall(action,args,{socket:join(directory,'reader.sock')})), baseUrl: `${origin}${prefix}`, dataDirectory: directory, allowLoopback: true, auth: options });
     auth = service.auth;
   } else auth = await createAuth(options);
   t.after(async () => { await new Promise((resolve) => server.close(resolve)); if (service) await service.close(); else auth.close(); if(reader)await reader.close(); await rm(directory, { recursive: true, force: true }); });
@@ -94,6 +94,49 @@ async function fixture(t, { integrated = false, codingEnabled = false, call } = 
   }
   return { origin, issuer, resource, jwk, request, register, flow, exchange, get auth() { return auth; }, async restart() { auth.close(); auth = await createAuth(options); } };
 }
+
+
+test('handoff is disabled by default and cannot bypass authenticated MCP desktop lock', async t => {
+ const disabled=await fixture(t,{integrated:true});
+ assert.equal((await disabled.request('/patronus/handoff')).status,404);
+ const f=await fixture(t,{integrated:true,handoffEnabled:true,call:async(name,args)=>name==='patronus_desktop'
+   ? {action:args.action,screenshot:'/9j/AA==',screenshotMimeType:'image/jpeg',desktop:{startedAt:'fixture-desktop'}}
+   : {name:'Patronus'}});
+ const registration=await f.register(),grant=await f.flow(registration,{scope:'patronus:read'});
+ const token=await (await f.exchange(registration,grant)).json();
+ const client=new Client({name:'handoff-lock-fixture',version:'1.0.0'});
+ t.after(()=>client.close());
+ await client.connect(new StreamableHTTPClientTransport(new URL(f.resource),{requestInit:{headers:{Authorization:'Bearer '+token.access_token}}}));
+ const jar=new Map();
+ async function browser(path,init={}) {
+   const r=await f.request(path,{...init,headers:{cookie:[...jar].map(([k,v])=>k+'='+v).join('; '),...init.headers}});
+   for(const c of r.headers.getSetCookie()){const [pair]=c.split(';'),i=pair.indexOf('=');jar.set(pair.slice(0,i),pair.slice(i+1));}
+   return r;
+ }
+ const loginHtml=await (await browser('/patronus/handoff')).text(),loginCsrf=loginHtml.match(/name="csrf" value="([^"]+)"/)[1];
+ const login=await browser('/patronus/handoff/login',{method:'POST',headers:{origin:f.origin,'content-type':'application/json'},body:JSON.stringify({csrf:loginCsrf,password:'fixture-owner-password'})});
+ assert.equal(login.status,303);
+ const control=await (await browser('/patronus/handoff')).text(),csrf=control.match(/"csrf":"([^"]+)"/)[1];
+ const post=path=>browser('/patronus/handoff/'+path,{method:'POST',headers:{origin:f.origin,'content-type':'application/json','x-handoff-csrf':csrf},body:'{}'});
+ assert.equal((await post('take')).status,200);
+ const blocked=await client.callTool({name:'patronus_desktop',arguments:{action:'screenshot',idempotencyKey:'handoff-lock-fixture-001'}});
+ assert.equal(blocked.structuredContent.error.code,'DESKTOP_HUMAN_CONTROL');
+ const caps=await client.callTool({name:'patronus_capabilities',arguments:{}});
+ assert.equal(caps.structuredContent.ok,true);assert.equal(caps.structuredContent.manualHandoff.controlActive,true);
+ assert.equal(caps.structuredContent.manualHandoff.url,f.origin+'/patronus/handoff');
+ assert.equal((await post('frame')).status,200);
+ assert.equal((await post('finish')).status,200);
+ const released=await client.callTool({name:'patronus_desktop',arguments:{action:'screenshot',idempotencyKey:'handoff-lock-fixture-002'}});
+ assert.equal(released.structuredContent.ok,true);
+});
+
+test('handoff reuses the owner verifier and shared login rate limits', async t => {
+ const f=await fixture(t);
+ assert.equal(await f.auth.verifyOwnerPassword('fixture-owner-password','test-ip'),true);
+ assert.equal(await f.auth.verifyOwnerPassword('wrong','test-ip'),false);
+ for(let i=0;i<8;i++)await f.auth.verifyOwnerPassword('wrong','test-ip');
+ await assert.rejects(f.auth.verifyOwnerPassword('fixture-owner-password','test-ip'),e=>e.code==='LOGIN_RATE_LIMIT');
+});
 
 test('OAuth discovery, owner login, PKCE, JWT verification and persistent rotating refresh', async (t) => {
   const f = await fixture(t);

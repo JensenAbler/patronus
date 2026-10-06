@@ -229,6 +229,12 @@ export async function createAuth({ issuer, resourceUrl, passwordHash, jwks, cook
   return {
     provider, router,
     verifyAccessToken,
+    async verifyOwnerPassword(password, ip) {
+      if (limited(`login:${ip}`, 10, 900) || limited('login:global', 60, 900)) throw Object.assign(new Error('LOGIN_RATE_LIMIT'), {code:'LOGIN_RATE_LIMIT',status:429});
+      if (typeof password !== 'string' || !password.length || password.length > 1024) return false;
+      const actual = await scrypt(password, salt, 64, { N: 16384, r: 8, p: 1 });
+      return timingSafeEqual(actual, expected);
+    },
     close() { clearInterval(cleanup); db.close(); },
   };
 }
