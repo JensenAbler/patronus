@@ -92,7 +92,9 @@ export async function startProxy({signal,maxBytes,onBytes=()=>{},anyPort=false}=
       const {address,u}=await resolvePublic('https://'+req.url,lookup,{anyPort});
       if(!anyPort && u.port && u.port!=='443')throw fault('PORT_POLICY');
       const upstream=net.connect({host:address,port:Number(u.port)||443});
-      sockets.add(upstream);upstream.on('close',()=>sockets.delete(upstream));
+      // Closing an idle upstream must also close the browser's tunnel; otherwise
+      // it can reuse a socket that can no longer receive a response.
+      sockets.add(upstream);upstream.on('close',()=>{sockets.delete(upstream);client.destroy();});
       upstream.setTimeout(30000,()=>upstream.destroy());
       upstream.on('error',()=>client.destroy());
       upstream.on('connect',()=>{client.write('HTTP/1.1 200 Connection Established\r\n\r\n');if(head.length)upstream.write(head);upstream.on('data',count);upstream.pipe(client);client.pipe(upstream);});
