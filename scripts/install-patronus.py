@@ -50,6 +50,10 @@ if pathlib.Path('/sys/module/apparmor/parameters/enabled').exists():
 for p in ['/var/lib/patronus','/run/patronus']:
  pathlib.Path(p).mkdir(parents=True,exist_ok=True);run('chown','patronus:patronus',p);os.chmod(p,0o750 if p=='/run/patronus' else 0o700)
 if not shutil.which('xvfb-run') or not shutil.which('xauth'): raise SystemExit('Install xvfb and xauth before activation')
+# The persistent desktop session runs stock Google Chrome; Ubuntu's own loaded AppArmor
+# profile (/etc/apparmor.d/chrome) grants its sandbox user namespaces, so none is added here.
+for tool in ['google-chrome','Xvfb','openbox']:
+ if not shutil.which(tool): raise SystemExit('Install '+tool+' before activation (desktop session)')
 unit=f"""[Unit]
 Description=Patronus persistent web reader
 After=network-online.target
@@ -60,6 +64,7 @@ Group=patronus
 ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x1024x24 -nolisten tcp" /usr/bin/node {target}/src/patronus/server.js
 Environment=PLAYWRIGHT_BROWSERS_PATH={target}/browsers
 Environment=HOME=/var/lib/patronus
+Environment=PATRONUS_DESKTOP=1
 UMask=0077
 RuntimeDirectory=patronus
 RuntimeDirectoryMode=0750
@@ -69,15 +74,18 @@ Restart=on-failure
 RestartSec=3
 TimeoutStopSec=25
 KillMode=control-group
-MemoryMax=2G
-TasksMax=256
+MemoryMax=3G
+TasksMax=1024
 CPUQuota=150%
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/patronus /run/patronus
-InaccessiblePaths=-/opt -/root -/var/lib/praxis-root -/srv/praxis-code -/srv/praxis-control -/etc/praxis
+# /opt stays hidden except the stock Google Chrome install the desktop session runs.
+TemporaryFileSystem=/opt
+BindReadOnlyPaths=/opt/google/chrome
+InaccessiblePaths=-/root -/var/lib/praxis-root -/srv/praxis-code -/srv/praxis-control -/etc/praxis
 [Install]
 WantedBy=multi-user.target
 """

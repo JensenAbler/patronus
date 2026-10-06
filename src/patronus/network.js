@@ -5,9 +5,9 @@ import { lookup } from 'node:dns/promises';
 import ipaddr from 'ipaddr.js';
 export const agent = 'Patronus/0.1 (+https://github.com/JensenAbler/patronus)';
 export function fault(code, message = code) { return Object.assign(new Error(message), { code }); }
-export function safeURL(raw) {
+export function safeURL(raw, { anyPort = false } = {}) {
   const u = new URL(raw);
-  if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || (u.port && !['80','443'].includes(u.port))) throw fault('URL_POLICY');
+  if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || (!anyPort && u.port && !['80','443'].includes(u.port))) throw fault('URL_POLICY');
   return u;
 }
 // Search engines wrap result links in redirectors whose real destination is a
@@ -41,8 +41,8 @@ export function displayURL(raw) {
 export function isPublic(address) {
   try { let a=ipaddr.parse(address); if(a.kind()==='ipv6' && a.isIPv4MappedAddress()) a=a.toIPv4Address(); return a.range()==='unicast'; } catch { return false; }
 }
-export async function resolvePublic(raw, resolver=lookup) {
-  const u=safeURL(raw), hostname=u.hostname.replace(/^\[|\]$/g,'');
+export async function resolvePublic(raw, resolver=lookup, { anyPort = false } = {}) {
+  const u=safeURL(raw,{anyPort}), hostname=u.hostname.replace(/^\[|\]$/g,'');
   const rows=await resolver(hostname,{all:true});
   if (!rows.length || rows.some(r=>!isPublic(r.address))) throw fault('NETWORK_POLICY','Destination is not a public address.');
   return {u,address:rows[0].address,family:rows[0].family};
@@ -70,14 +70,18 @@ export async function request(raw,{signal,headers={},trace=()=>{},redirects=8}={
 }
 // DNS is resolved and checked once, then the socket is pinned to that address.
 // Both ordinary HTTP and CONNECT traffic use this same policy.
-export async function startProxy({signal,maxBytes,onBytes=()=>{}}={}) {
+// The desktop browser (anyPort) may reach public services on any port, such as
+// DirectAdmin on 2222; retrieval jobs stay on 80/443. Private addresses never pass.
+export async function startProxy({signal,maxBytes,onBytes=()=>{},anyPort=false}={}) {
   const sockets=new Set();let total=0;
   const count=chunk=>{total+=chunk.length;onBytes(total);if(total>maxBytes) for(const s of sockets)s.destroy();};
   const server=http.createServer(async(req,res)=>{
     try {
       if(!['GET','HEAD'].includes(req.method))throw fault('METHOD_POLICY');
-      const {u,address,family}=await resolvePublic(req.url);
-      const upstream=http.request(u,{method:req.method,headers:{...req.headers,host:u.host},lookup:(_h,o,cb)=>o?.all?cb(null,[{address,family}]):cb(null,address,family)},r=>{
+      const {u,address,family}=await resolvePublic(req.url,lookup,{anyPort});
+      // Proxy-only headers are for this hop; forwarding them would reveal the proxy.
+      const headers={...req.headers,host:u.host};delete headers['proxy-connection'];delete headers['proxy-authorization'];
+      const upstream=http.request(u,{method:req.method,headers,lookup:(_h,o,cb)=>o?.all?cb(null,[{address,family}]):cb(null,address,family)},r=>{
         res.writeHead(r.statusCode,r.headers);r.on('data',count);r.pipe(res);
       });
       upstream.on('error',()=>{res.destroy();});req.pipe(upstream);
@@ -85,9 +89,9 @@ export async function startProxy({signal,maxBytes,onBytes=()=>{}}={}) {
   });
   server.on('connect',async(req,client,head)=>{
     try{
-      const {address,u}=await resolvePublic('https://'+req.url);
-      if(u.port && u.port!=='443')throw fault('PORT_POLICY');
-      const upstream=net.connect({host:address,port:443});
+      const {address,u}=await resolvePublic('https://'+req.url,lookup,{anyPort});
+      if(!anyPort && u.port && u.port!=='443')throw fault('PORT_POLICY');
+      const upstream=net.connect({host:address,port:Number(u.port)||443});
       sockets.add(upstream);upstream.on('close',()=>sockets.delete(upstream));
       upstream.setTimeout(30000,()=>upstream.destroy());
       upstream.on('error',()=>client.destroy());

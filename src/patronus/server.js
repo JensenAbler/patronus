@@ -3,9 +3,12 @@ import { mkdirSync, chmodSync, existsSync, unlinkSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Patronus } from './engine.js';
+import { Desktop } from './desktop.js';
 import { patronusTools } from './schema.js';
 export async function serve({root='/var/lib/patronus',socket='/run/patronus/api.sock'}={}) {
  const engine=new Patronus(root);
+ // The persistent human-first browser runs only where the installer enables it.
+ if(process.env.PATRONUS_DESKTOP==='1'){engine.desktop=new Desktop({root});engine.desktop.start().catch(()=>console.error('patronus_desktop_start_failed'));}
  mkdirSync(dirname(socket),{recursive:true,mode:0o700});if(existsSync(socket))unlinkSync(socket);
  const server=http.createServer(async(req,res)=>{
   res.setHeader('content-type','application/json');
@@ -19,7 +22,8 @@ export async function serve({root='/var/lib/patronus',socket='/run/patronus/api.
  });
  await new Promise(r=>server.listen(socket,r));chmodSync(socket,0o660);
  const timer=setInterval(()=>engine.tick().catch(()=>console.error('patronus_tick_failed')),500);
- return {engine,server,close:async()=>{clearInterval(timer);server.close();await engine.close();}};
+ const desktopTimer=engine.desktop?setInterval(()=>engine.desktop.ensure().catch(()=>console.error('patronus_desktop_ensure_failed')),15000):null;
+ return {engine,server,close:async()=>{clearInterval(timer);clearInterval(desktopTimer);server.close();await engine.desktop?.stop();await engine.close();}};
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  const svc=await serve({root:process.env.PATRONUS_DATA_DIR,socket:process.env.PATRONUS_SOCKET});let closing=false;
