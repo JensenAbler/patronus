@@ -10,10 +10,11 @@ export function validClient(c, redirect) {
     && typeof c.client_secret==='string' && c.client_secret.length>0
     && c.redirect_uris?.includes(redirect);
 }
-export function createHandler({dir, origin, key, expectedEmail, fetcher=fetch}) {
+export function createHandler({dir, origin, key, expectedEmail, activityMode=false, fetcher=fetch}) {
+  const scope=activityMode ? SCOPE+' https://www.googleapis.com/auth/drive.activity.readonly' : SCOPE;
   const redirect=origin+BASE+'/callback';
   const sessions=new Map();
-  let complete=fs.existsSync(dir+'/authorized.json');
+  let complete=fs.existsSync(dir+'/authorized.json') && (!activityMode || JSON.parse(fs.readFileSync(dir+'/authorized.json','utf8')).scope?.split(' ').includes('https://www.googleapis.com/auth/drive.activity.readonly'));
   const equal=(a,b)=>typeof a==='string' && typeof b==='string' && a.length===b.length && crypto.timingSafeEqual(Buffer.from(a),Buffer.from(b));
   const save=(name,value)=>{const p=dir+'/'+name;fs.writeFileSync(p+'.new',value,{mode:0o600});fs.renameSync(p+'.new',p);};
   const page=(res,status,text)=>{res.writeHead(status,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'same-origin','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'; base-uri 'none'"});res.end('<meta name="viewport" content="width=device-width,initial-scale=1"><title>Drive storage audit</title><style>body{font:18px system-ui;max-width:650px;margin:40px auto;padding:20px}input,textarea,button{font:inherit;max-width:100%;margin:12px 0}textarea{width:100%;height:160px}</style>'+text);};
@@ -33,6 +34,7 @@ export function createHandler({dir, origin, key, expectedEmail, fetcher=fetch}) 
       }
       if(u.pathname===BASE+'/setup' && req.method==='GET') {
         if(!s) return page(res,403,'Open the private setup link again.');
+        if(activityMode) return page(res,200,'<h1>Read-only Drive activity</h1><p>Allow viewing file activity to investigate the duplicate recordings. No permission to change or delete files is requested.</p><form method="post" action="'+BASE+'/setup"><input type="hidden" name="csrf" value="'+s.csrf+'"><button>Continue to Google</button></form>');
         return page(res,200,'<h1>Connect read-only Drive metadata</h1><p>Paste the downloaded Web OAuth client JSON here. It stays on Alpha. Google will ask you to approve metadata-only access next.</p><form method="post" action="'+BASE+'/setup"><input type="hidden" name="csrf" value="'+s.csrf+'"><textarea name="client" required autocomplete="off" placeholder="OAuth client JSON"></textarea><br><button>Continue to Google</button></form>');
       }
       if(u.pathname===BASE+'/setup' && req.method==='POST') {
@@ -42,13 +44,18 @@ export function createHandler({dir, origin, key, expectedEmail, fetcher=fetch}) 
         let body=''; for await(const chunk of req){body+=chunk;if(body.length>20000)return page(res,413,'Upload too large.');}
         const form=new URLSearchParams(body);
         if(!equal(form.get('csrf'),s.csrf)) return page(res,403,'Invalid setup session.');
-        const c=JSON.parse(form.get('client')||'{}').web;
+        let c;
+        if(activityMode) {
+          const ini=fs.readFileSync(dir+'/rclone.conf','utf8');
+          const field=n=>new RegExp('^'+n+' = (.+)$','m').exec(ini)?.[1];
+          c={client_id:field('client_id'),client_secret:field('client_secret'),redirect_uris:[redirect]};
+        } else c=JSON.parse(form.get('client')||'{}').web;
         if(!validClient(c,redirect))return page(res,400,'Use a Web client JSON whose authorized redirect URI includes '+redirect);
         s.client={client_id:c.client_id,client_secret:c.client_secret};
         s.state=crypto.randomBytes(32).toString('hex');
         s.verifier=crypto.randomBytes(48).toString('base64url');
         const auth=new URL('https://accounts.google.com/o/oauth2/v2/auth');
-        auth.search=new URLSearchParams({client_id:c.client_id,redirect_uri:redirect,response_type:'code',scope:SCOPE,access_type:'offline',prompt:'consent',login_hint:expectedEmail,state:s.state,code_challenge:crypto.createHash('sha256').update(s.verifier).digest('base64url'),code_challenge_method:'S256'}).toString();
+        auth.search=new URLSearchParams({client_id:c.client_id,redirect_uri:redirect,response_type:'code',scope,access_type:'offline',prompt:'consent',login_hint:expectedEmail,state:s.state,code_challenge:crypto.createHash('sha256').update(s.verifier).digest('base64url'),code_challenge_method:'S256'}).toString();
         res.writeHead(303,{'Location':auth.href,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'});return res.end();
       }
       if(u.pathname===BASE+'/callback' && req.method==='GET') {
@@ -58,7 +65,7 @@ export function createHandler({dir, origin, key, expectedEmail, fetcher=fetch}) 
         const response=await fetcher('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({...s.client,code:u.searchParams.get('code'),redirect_uri:redirect,grant_type:'authorization_code',code_verifier:s.verifier}),signal:AbortSignal.timeout(20000)});
         if(!response.ok) return page(res,502,'Google could not exchange the authorization code. No credentials were saved.');
         const t=await response.json();
-        if(!t.access_token || !t.refresh_token || t.scope?.trim()!==SCOPE) return page(res,403,'Google did not return the expected metadata-only authorization. No credentials were saved.');
+        if(!t.access_token || !t.refresh_token || [...new Set((t.scope||'').trim().split(/\s+/))].sort().join(' ')!==scope.split(' ').sort().join(' ')) return page(res,403,'Google did not return the expected read-only authorization. No credentials were saved.');
         const profile=await fetcher('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress),storageQuota',{headers:{Authorization:'Bearer '+t.access_token},signal:AbortSignal.timeout(20000)});
         if(!profile.ok) return page(res,502,'Could not verify the Drive account. No credentials were saved.');
         const p=await profile.json();
@@ -67,9 +74,9 @@ export function createHandler({dir, origin, key, expectedEmail, fetcher=fetch}) 
         // Reject newlines before constructing the isolated rclone INI.
         if(Object.values(s.client).some(v=>/[\r\n]/.test(v))) return page(res,400,'Invalid client metadata.');
         save('rclone.conf','[hardcore-audit]\ntype = drive\nscope = drive.metadata.readonly\nclient_id = '+s.client.client_id+'\nclient_secret = '+s.client.client_secret+'\ntoken = '+JSON.stringify(token)+'\n');
-        save('authorized.json',JSON.stringify({email:p.user.emailAddress,scope:SCOPE,at:new Date().toISOString(),storageQuota:p.storageQuota}));
+        save('authorized.json',JSON.stringify({email:p.user.emailAddress,scope,at:new Date().toISOString(),storageQuota:p.storageQuota}));
         complete=true;sessions.clear();
-        return page(res,200,'<h1>Connected</h1><p>Read-only Drive metadata access is ready. Return to ChatGPT to continue the storage audit.</p>');
+        return page(res,200,'<h1>Connected</h1><p>Read-only Drive access is ready. Return to ChatGPT to continue the storage audit.</p>');
       }
       return page(res,404,'Not found.');
     } catch { if(!res.headersSent)page(res,500,'Setup could not complete. No details or credentials have been logged.');else res.end(); }
@@ -78,6 +85,6 @@ export function createHandler({dir, origin, key, expectedEmail, fetcher=fetch}) 
 if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href){
  const dir=process.env.DRIVE_AUDIT_DIR||'/var/lib/drive-storage-audit';
  const key=fs.readFileSync(dir+'/setup-key','utf8').trim();
- const handler=createHandler({dir,key,origin:process.env.DRIVE_AUDIT_ORIGIN,expectedEmail:process.env.DRIVE_AUDIT_EMAIL});
+ const handler=createHandler({dir,key,origin:process.env.DRIVE_AUDIT_ORIGIN,expectedEmail:process.env.DRIVE_AUDIT_EMAIL,activityMode:process.env.DRIVE_AUDIT_ACTIVITY==='1'});
  http.createServer(handler).listen(Number(process.env.PORT||8796),'127.0.0.1');
 }
