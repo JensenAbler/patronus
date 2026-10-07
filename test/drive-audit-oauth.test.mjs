@@ -23,7 +23,9 @@ test('metadata OAuth validates session, scope, account and single-use callback',
   assert.equal(calls,0);
   const setup=await fetch(base+'/drive-audit/setup/private-test-key',{redirect:'manual'});
   const cookie=setup.headers.get('set-cookie').split(';')[0];
-  const form=await(await fetch(base+'/drive-audit/setup',{headers:{cookie}})).text();
+  const formResponse=await fetch(base+'/drive-audit/setup',{headers:{cookie}});
+  assert.equal(formResponse.headers.get('referrer-policy'),'same-origin');
+  const form=await formResponse.text();
   const csrf=/name="csrf" value="([^"]+)"/.exec(form)[1];
   const body=new URLSearchParams({csrf,client:JSON.stringify({web:{client_id:'x.apps.googleusercontent.com',client_secret:'secret',redirect_uris:[redirect]}})});
   assert.equal((await fetch(base+'/drive-audit/setup',{method:'POST',headers:{cookie,Origin:'https://evil.example'},body,redirect:'manual'})).status,403);

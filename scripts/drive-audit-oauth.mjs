@@ -16,7 +16,7 @@ export function createHandler({dir, origin, key, expectedEmail, fetcher=fetch}) 
   let complete=fs.existsSync(dir+'/authorized.json');
   const equal=(a,b)=>typeof a==='string' && typeof b==='string' && a.length===b.length && crypto.timingSafeEqual(Buffer.from(a),Buffer.from(b));
   const save=(name,value)=>{const p=dir+'/'+name;fs.writeFileSync(p+'.new',value,{mode:0o600});fs.renameSync(p+'.new',p);};
-  const page=(res,status,text)=>{res.writeHead(status,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end('<meta name="viewport" content="width=device-width,initial-scale=1"><title>Drive storage audit</title><style>body{font:18px system-ui;max-width:650px;margin:40px auto;padding:20px}input,textarea,button{font:inherit;max-width:100%;margin:12px 0}textarea{width:100%;height:160px}</style>'+text);};
+  const page=(res,status,text)=>{res.writeHead(status,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'same-origin','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end('<meta name="viewport" content="width=device-width,initial-scale=1"><title>Drive storage audit</title><style>body{font:18px system-ui;max-width:650px;margin:40px auto;padding:20px}input,textarea,button{font:inherit;max-width:100%;margin:12px 0}textarea{width:100%;height:160px}</style>'+text);};
   return async(req,res)=>{
     try {
       const u=new URL(req.url,origin);
@@ -36,7 +36,9 @@ export function createHandler({dir, origin, key, expectedEmail, fetcher=fetch}) 
         return page(res,200,'<h1>Connect read-only Drive metadata</h1><p>Paste the downloaded Web OAuth client JSON here. It stays on Alpha. Google will ask you to approve metadata-only access next.</p><form method="post" action="'+BASE+'/setup"><input type="hidden" name="csrf" value="'+s.csrf+'"><textarea name="client" required autocomplete="off" placeholder="OAuth client JSON"></textarea><br><button>Continue to Google</button></form>');
       }
       if(u.pathname===BASE+'/setup' && req.method==='POST') {
-        if(!s || req.headers.origin!==origin || !(req.headers['content-type']||'').startsWith('application/x-www-form-urlencoded')) return page(res,403,'Invalid setup request.');
+        if(!s) return page(res,403,'Setup session expired or cookies are unavailable. Reopen the private setup link in Safari and try again.');
+        if(req.headers.origin!==origin) return page(res,403,'Browser origin was missing or incorrect. Reopen the private setup link, reload the form, and try again.');
+        if(!(req.headers['content-type']||'').startsWith('application/x-www-form-urlencoded')) return page(res,415,'Unsupported form format. Reload the setup form.');
         let body=''; for await(const chunk of req){body+=chunk;if(body.length>20000)return page(res,413,'Upload too large.');}
         const form=new URLSearchParams(body);
         if(!equal(form.get('csrf'),s.csrf)) return page(res,403,'Invalid setup session.');
