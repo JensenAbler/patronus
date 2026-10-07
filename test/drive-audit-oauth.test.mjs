@@ -25,6 +25,7 @@ test('metadata OAuth validates session, scope, account and single-use callback',
   const cookie=setup.headers.get('set-cookie').split(';')[0];
   const formResponse=await fetch(base+'/drive-audit/setup',{headers:{cookie}});
   assert.equal(formResponse.headers.get('referrer-policy'),'same-origin');
+  assert.match(formResponse.headers.get('content-security-policy'), /form-action 'self' https:\/\/accounts\.google\.com;/);
   const form=await formResponse.text();
   const csrf=/name="csrf" value="([^"]+)"/.exec(form)[1];
   const body=new URLSearchParams({csrf,client:JSON.stringify({web:{client_id:'x.apps.googleusercontent.com',client_secret:'secret',redirect_uris:[redirect]}})});

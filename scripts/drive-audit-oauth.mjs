@@ -16,7 +16,7 @@ export function createHandler({dir, origin, key, expectedEmail, fetcher=fetch}) 
   let complete=fs.existsSync(dir+'/authorized.json');
   const equal=(a,b)=>typeof a==='string' && typeof b==='string' && a.length===b.length && crypto.timingSafeEqual(Buffer.from(a),Buffer.from(b));
   const save=(name,value)=>{const p=dir+'/'+name;fs.writeFileSync(p+'.new',value,{mode:0o600});fs.renameSync(p+'.new',p);};
-  const page=(res,status,text)=>{res.writeHead(status,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'same-origin','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end('<meta name="viewport" content="width=device-width,initial-scale=1"><title>Drive storage audit</title><style>body{font:18px system-ui;max-width:650px;margin:40px auto;padding:20px}input,textarea,button{font:inherit;max-width:100%;margin:12px 0}textarea{width:100%;height:160px}</style>'+text);};
+  const page=(res,status,text)=>{res.writeHead(status,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'same-origin','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'; base-uri 'none'"});res.end('<meta name="viewport" content="width=device-width,initial-scale=1"><title>Drive storage audit</title><style>body{font:18px system-ui;max-width:650px;margin:40px auto;padding:20px}input,textarea,button{font:inherit;max-width:100%;margin:12px 0}textarea{width:100%;height:160px}</style>'+text);};
   return async(req,res)=>{
     try {
       const u=new URL(req.url,origin);
