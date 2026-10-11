@@ -1,0 +1,797 @@
+{
+  "schema_version": "1.0",
+  "created_at_utc": "2026-10-11T20:30:04Z",
+  "title": "Patronus and native cloud browser evaluation",
+  "status": "ready_for_pilot_after_transport_recovery",
+  "primary_question": "For which task, domain, and session conditions does Patronus complete the same user task more reliably or with less effort than native cloud Chrome?",
+  "modes": {
+    "native_cloud_chrome": {
+      "label": "Native interactive cloud Chrome",
+      "backend": "dot cloud browser cdp",
+      "role": "primary comparator",
+      "capability_gate": "Inspect current supported browser APIs. User desktop is not the comparator."
+    },
+    "patronus_reader_browser": {
+      "label": "Patronus browser-rendered reader",
+      "backend": "Alpha preconfigured session",
+      "tool": "patronus_start",
+      "parameters": {
+        "mode": "read",
+        "rendering": "browser",
+        "maxPages": 1
+      },
+      "role": "primary for extraction"
+    },
+    "patronus_reader_auto": {
+      "label": "Patronus auto reader",
+      "backend": "Alpha",
+      "parameters": {
+        "mode": "read",
+        "rendering": "auto"
+      },
+      "role": "optional routing strategy; never pool with forced browser"
+    },
+    "patronus_reader_http": {
+      "label": "Patronus HTTP reader",
+      "backend": "Alpha",
+      "parameters": {
+        "mode": "read",
+        "rendering": "http"
+      },
+      "role": "optional mechanism diagnostic"
+    },
+    "patronus_download": {
+      "label": "Patronus direct download",
+      "backend": "Alpha",
+      "parameters": {
+        "mode": "download"
+      },
+      "role": "primary for direct file tasks"
+    },
+    "patronus_desktop": {
+      "label": "Patronus headed desktop browser",
+      "backend": "Alpha",
+      "role": "conditional primary for interactive tasks",
+      "capability_gate": "Desktop/handoff described in project context; callable interaction surface was not verified. Do not invent an API. Mark capability unavailable until discovered and authorized."
+    },
+    "web_text": {
+      "label": "Web textual fetch",
+      "backend": "web open/search",
+      "role": "secondary diagnostic baseline only; never called built-in interactive browser"
+    }
+  },
+  "profiles": {
+    "cold_public": {
+      "auth": "logged_out",
+      "cache": "fresh dedicated evaluation profile",
+      "requires_verified_isolation": true
+    },
+    "warm_public": {
+      "auth": "logged_out",
+      "cache": "same dedicated profile after exactly one unscored priming load",
+      "requires_verified_isolation": true
+    },
+    "warm_authenticated": {
+      "auth": "same authorized account/entitlements on both arms",
+      "cache": "record age and previous actions",
+      "requires_explicit_scope": true
+    },
+    "public_observed": {
+      "auth": "record logged-out or unknown",
+      "cache": "uncontrolled existing profile",
+      "caution": "Practical product behavior only; not evidence of a cold/warm or engine-only advantage."
+    }
+  },
+  "design": {
+    "pilot_repeats": 2,
+    "routing_min_pairs": 12,
+    "routing_target_pairs": 12,
+    "stopping_rule": "Fixed 12 matched pairs per registered stratum. Examine confirmatory routing once at the end; extra or adaptive samples are exploratory unless a new design is preregistered.",
+    "routing_min_utc_dates": 3,
+    "routing_min_absolute_completion_gain": 0.2,
+    "paired_test": "two-sided exact McNemar on discordant complete pairs; no cross-case confirmatory claim without multiplicity correction",
+    "familywise_alpha": 0.05,
+    "randomization": "seeded case order and counterbalanced AB/BA within each case/profile; log actual timing",
+    "same_pair_max_gap_seconds": 600,
+    "per_origin_min_interval_seconds": 15,
+    "max_concurrent_pairs_per_origin": 1,
+    "global_pilot_time_cap_seconds": 3600,
+    "max_navigation_retries": 1,
+    "max_tool_calls_per_arm": 20,
+    "max_download_bytes": 5242880
+  },
+  "cases": [
+    {
+      "id": "C01",
+      "suite": "public_control",
+      "name": "Static HTML extraction",
+      "url": "https://httpbin.org/html",
+      "url_status": "verified_via_textual_fetch_2026-10-11",
+      "task": "Return page heading and identify the blacksmith described in the main text, with source URL.",
+      "required_checks": [
+        "heading_matches",
+        "answer_matches",
+        "correct_source",
+        "no_invented_content"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": true,
+      "budget_seconds": 120,
+      "source": "Public URL selected for this evaluation",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version.",
+      "ground_truth_override": {
+        "heading": "Herman Melville - Moby-Dick",
+        "blacksmith": "Perth"
+      }
+    },
+    {
+      "id": "C02",
+      "suite": "public_control",
+      "name": "Long structured article",
+      "url": "https://www.w3.org/Style/Examples/011/firstcss.en.html",
+      "url_status": "verified_via_textual_fetch_2026-10-11",
+      "task": "Report the tutorial subject and the number of numbered steps; identify the final step and its section link.",
+      "required_checks": [
+        "subject_matches",
+        "seven_steps_found",
+        "final_step_matches",
+        "correct_section_link"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": true,
+      "budget_seconds": 120,
+      "source": "Public URL selected for this evaluation",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version.",
+      "ground_truth_override": {
+        "step_count": 7,
+        "final_step_subject": "Move CSS into an external stylesheet"
+      }
+    },
+    {
+      "id": "J01",
+      "suite": "javascript_and_fidelity",
+      "name": "Onyx rendered copy",
+      "url": "https://www.onyxvfx.com/",
+      "url_status": "verified_via_textual_fetch_2026-10-11",
+      "task": "Locate the main About heading and report whether the visible copy describes a VFX studio. Preserve the heading accurately and do not confuse this site with Loom.",
+      "required_checks": [
+        "about_heading_matches",
+        "body_claim_supported",
+        "visible_section_verified",
+        "correct_site"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": true,
+      "budget_seconds": 120,
+      "source": "Public URL selected for this evaluation",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version.",
+      "ground_truth_override": {
+        "about_heading": "A Modern VFX Partner for Film, Television, and Streaming"
+      }
+    },
+    {
+      "id": "J02",
+      "suite": "interaction",
+      "name": "Delayed content after click",
+      "url": "https://the-internet.herokuapp.com/dynamic_loading/2",
+      "url_status": "verified_via_textual_fetch_2026-10-11",
+      "task": "Click Start once, wait for completion, and report the newly rendered greeting.",
+      "required_checks": [
+        "start_clicked_once",
+        "loading_finished",
+        "greeting_matches",
+        "post_action_evidence"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_desktop"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 90,
+      "source": "Public URL selected for this evaluation",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version.",
+      "ground_truth_override": {
+        "greeting": "Hello World!"
+      },
+      "reader_boundary": "Reader mode is retrieval-only and is not silently substituted for desktop interaction."
+    },
+    {
+      "id": "F01",
+      "suite": "files",
+      "name": "Direct PDF download",
+      "url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+      "url_status": "verified_via_textual_fetch_2026-10-11",
+      "task": "Download the actual PDF; verify readable bytes and extract its one-page text.",
+      "required_checks": [
+        "pdf_bytes_readable",
+        "one_page",
+        "text_matches",
+        "sha256_recorded",
+        "byte_length_recorded"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_download"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": true,
+      "budget_seconds": 120,
+      "source": "Public URL selected for this evaluation",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version.",
+      "ground_truth_override": {
+        "page_count": 1,
+        "text": "Dummy PDF file"
+      },
+      "max_bytes": 5242880
+    },
+    {
+      "id": "T01",
+      "suite": "transcripts",
+      "name": "Public podcast transcript extraction",
+      "url": "https://clawcast.jensenabler.com/episodes/episode-09-v002_transcript.html",
+      "url_status": "supplied_unverified",
+      "task": "Identify the episode and extract all speaker labels in first-occurrence order plus one short opening and closing anchor. Check that the end of the transcript is present.",
+      "required_checks": [
+        "episode_matches",
+        "speaker_order_matches",
+        "opening_anchor_matches",
+        "closing_anchor_matches",
+        "no_middle_truncation"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": true,
+      "budget_seconds": 120,
+      "source": "Prior user-requested public transcript target; textual tool could not open it on 2026-10-11; this is not a browser trial.",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version."
+    },
+    {
+      "id": "T02",
+      "suite": "files",
+      "name": "Public transcript file download",
+      "url": "https://clawcast.jensenabler.com/episodes/episode-09-v002_transcript.html",
+      "url_status": "supplied_unverified",
+      "task": "Download the transcript HTML as bytes, verify its content type or sniffed format, and compare complete text coverage with the frozen transcript reference.",
+      "required_checks": [
+        "bytes_readable",
+        "format_verified",
+        "closing_anchor_present",
+        "sha256_recorded",
+        "byte_length_recorded"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_download"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Prior user-requested public transcript target",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version.",
+      "max_bytes": 5242880,
+      "related_case": "T01",
+      "aggregation_note": "Different task: file integrity rather than reading. Do not count twice in a domain-weighted access score."
+    },
+    {
+      "id": "V01",
+      "suite": "video",
+      "name": "Embedded portfolio reel playback",
+      "url": "https://jensenabler.com/",
+      "url_status": "supplied_unverified",
+      "task": "Locate the reel on the portfolio page and attempt public playback. Verify time advancement and changing video frames; a thumbnail or player shell is insufficient.",
+      "required_checks": [
+        "correct_embed",
+        "playback_clock_advances_5s",
+        "two_changing_frames",
+        "no_fatal_player_error"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_desktop"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 180,
+      "source": "Prior user-requested own portfolio target",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version.",
+      "companion_group": "jensen_reel"
+    },
+    {
+      "id": "V02",
+      "suite": "video",
+      "name": "Direct Vimeo reel playback",
+      "url": "https://vimeo.com/1534472192",
+      "url_status": "supplied_unverified",
+      "task": "Attempt the supplied reel directly on Vimeo. Verify time advancement and changing video frames, and record whether access differs from the embedded page.",
+      "required_checks": [
+        "correct_video_identifier",
+        "playback_clock_advances_5s",
+        "two_changing_frames",
+        "no_fatal_player_error"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_desktop"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 180,
+      "source": "Prior user-supplied Vimeo identifier; existence and ownership not reverified",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version.",
+      "companion_group": "jensen_reel",
+      "aggregation_note": "Embedded/direct companion contexts; do not treat as independent domains."
+    },
+    {
+      "id": "X01",
+      "suite": "public_social_and_antibot",
+      "name": "Public X post access",
+      "url": "https://x.com/jordanarchivess/status/2107536262894915762",
+      "url_status": "supplied_unverified",
+      "task": "Read this exact public post and identify the visible author and post text. Distinguish a login wall, challenge, missing post, and incomplete extraction.",
+      "required_checks": [
+        "post_id_matches",
+        "author_matches_reference",
+        "post_text_matches_reference",
+        "no_search_snippet_substitution"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Prior exact public post supplied by user; tracking query removed from canonical URL",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version.",
+      "source_query_note": "Original had s and t tracking parameters; values omitted from the kit."
+    },
+    {
+      "id": "P01",
+      "suite": "persistence",
+      "name": "Resume public retrieval after client interruption",
+      "url": "https://clawcast.jensenabler.com/episodes/episode-09-v002_transcript.html",
+      "url_status": "supplied_unverified",
+      "task": "Start one bounded public retrieval; save the returned job or tab ID, stop polling for 30 seconds, then reattach to the same job or tab without restarting it. Recover the result exactly once.",
+      "required_checks": [
+        "same_job_or_tab_id",
+        "result_recovered",
+        "no_duplicate_job",
+        "elapsed_and_tool_calls_recorded"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 180,
+      "source": "Prior public transcript target",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version.",
+      "aggregation_note": "Persistence feature score only; exclude from access score. If a true job is needed for disconnect recovery, record native mode as capability-not-applicable.",
+      "precondition_note": "A 30-second no-poll interval tests continuity, not a server restart or a proven network disconnect. Record interruption kind precisely."
+    },
+    {
+      "id": "G01",
+      "suite": "gated_antibot_auth",
+      "name": "X10 login boundary",
+      "url": null,
+      "url_status": "supplied_unverified",
+      "task": "Reproduce the previously observed login boundary only after resolving the exact official URL and approving the bounded sign-in or CAPTCHA step. Record what is observable before intervention.",
+      "required_checks": [
+        "official_target_verified",
+        "challenge_classified",
+        "auth_state_verified",
+        "no_secrets_recorded"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_desktop"
+      ],
+      "profiles": [
+        "cold_public"
+      ],
+      "gate": "Resolve exact X10 URL and account/service; sign-in, CAPTCHA, or ongoing-access actions require their applicable approval. No credential collection.",
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Prior anecdote of CAPTCHA or network block; exact service unresolved",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version."
+    },
+    {
+      "id": "G02",
+      "suite": "unresolved_dynamic",
+      "name": "Loom careers copy",
+      "url": null,
+      "url_status": "supplied_unverified",
+      "task": "Resolve the intended Loom careers page from the original context, then define a precise visible-copy extraction task before scheduling.",
+      "required_checks": [
+        "official_target_verified",
+        "copy_reference_frozen",
+        "visible_copy_matches",
+        "correct_site"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": "Exact company and URL unresolved. Do not guess a Loom domain. Onyx is the verified site for the earlier copy phrase.",
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Prior Loom careers reference; parent clarified that a disputed phrase belonged to Onyx",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version."
+    },
+    {
+      "id": "G03",
+      "suite": "gated_government",
+      "name": "DMV status lookup",
+      "url": null,
+      "url_status": "supplied_unverified",
+      "task": "With a verified jurisdiction and official URL, inspect a user-approved status lookup and report only the requested status. Stop at restricted authentication or agreement steps.",
+      "required_checks": [
+        "jurisdiction_verified",
+        "status_supported_by_current_ui",
+        "private_fields_redacted",
+        "no_unauthorized_legal_acceptance"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_desktop"
+      ],
+      "profiles": [
+        "warm_authenticated"
+      ],
+      "gate": "Official jurisdiction/URL and specific status task unresolved; manual government legal agreement acceptance and highly sensitive data entry remain user-only. Separate approval for any personal data sent.",
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Prior government status task; private details deliberately omitted",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version."
+    },
+    {
+      "id": "G04",
+      "suite": "gated_orders",
+      "name": "Apple order false-error regression",
+      "url": null,
+      "url_status": "supplied_unverified",
+      "task": "On the verified order-status flow and only with approved data, distinguish a real lookup rejection from incomplete rendering or a stale message. Refresh or wait only within the agreed read-only scope.",
+      "required_checks": [
+        "official_target_verified",
+        "result_tied_to_current_request",
+        "error_grounded_in_visible_evidence",
+        "order_data_not_logged"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_desktop"
+      ],
+      "profiles": [
+        "warm_authenticated"
+      ],
+      "gate": "Verify exact official Apple flow; authorize specific order data/destination before entry; no order changes, cancellation, payment, or credentials in results.",
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Prior false-error anecdote; no order identifiers included",
+      "ground_truth": "Freeze expected answers from rendered page and authoritative source at run time; record adjudicator and content version."
+    },
+    {
+      "id": "R01",
+      "suite": "login_wall",
+      "name": "Instagram profile, logged out",
+      "url": "https://www.instagram.com/theresidencysound/",
+      "url_status": "observed_2026-10-11",
+      "task": "Without a logged-in session, report whether profile content is reachable. A correct result names the login wall as the obstacle; it must not present a login page, rate-limit page, or cached snippet as profile content.",
+      "required_checks": [
+        "login_wall_identified",
+        "no_profile_content_invented",
+        "final_url_recorded",
+        "obstacle_named_not_generic"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Residency research session 2026-10-11; prior observations in ../corpus.json",
+      "ground_truth": "Freeze expected answers from rendered page at run time; record adjudicator and content version.",
+      "corpus_ref": "instagram-profile-logged-out"
+    },
+    {
+      "id": "R02",
+      "suite": "login_wall",
+      "name": "Second Instagram profile, logged out",
+      "url": "https://www.instagram.com/itai_music/",
+      "url_status": "observed_2026-10-11",
+      "task": "Same as R01 for a second profile on the same origin; pace per per_origin_min_interval_seconds.",
+      "required_checks": [
+        "login_wall_identified",
+        "no_profile_content_invented",
+        "final_url_recorded",
+        "obstacle_named_not_generic"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Residency research session 2026-10-11; prior observations in ../corpus.json",
+      "ground_truth": "Freeze expected answers from rendered page at run time; record adjudicator and content version.",
+      "corpus_ref": "instagram-second-profile-logged-out"
+    },
+    {
+      "id": "R03",
+      "suite": "link_in_bio",
+      "name": "Linktree link list",
+      "url": "https://linktr.ee/TheResidencySound",
+      "url_status": "observed_2026-10-11",
+      "task": "List every outbound link with its label, and report the venue named in the page text.",
+      "required_checks": [
+        "all_links_listed",
+        "labels_match",
+        "venue_matches",
+        "no_invented_links"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Residency research session 2026-10-11; prior observations in ../corpus.json",
+      "ground_truth": "Freeze expected answers from rendered page at run time; record adjudicator and content version.",
+      "corpus_ref": "linktree-profile"
+    },
+    {
+      "id": "R04",
+      "suite": "creator_platform",
+      "name": "Patreon creator page",
+      "url": "https://www.patreon.com/soundconnections",
+      "url_status": "observed_2026-10-11",
+      "task": "Report the creator name, tagline, and visible membership tiers or the obstacle preventing it.",
+      "required_checks": [
+        "creator_matches",
+        "tagline_matches",
+        "tiers_or_obstacle_reported",
+        "no_invented_content"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Residency research session 2026-10-11; prior observations in ../corpus.json",
+      "ground_truth": "Freeze expected answers from rendered page at run time; record adjudicator and content version.",
+      "corpus_ref": "patreon-creator-page"
+    },
+    {
+      "id": "R05",
+      "suite": "google_forms",
+      "name": "Google Form via forms.gle short link",
+      "url": "https://forms.gle/CvDELqzxzBRsNsai9",
+      "url_status": "observed_2026-10-11",
+      "task": "Follow the short link and extract the form title, intro text, and every question label in order.",
+      "required_checks": [
+        "redirect_followed",
+        "title_matches",
+        "all_questions_in_order",
+        "intro_text_complete"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Residency research session 2026-10-11; prior observations in ../corpus.json",
+      "ground_truth": "Freeze expected answers from rendered page at run time; record adjudicator and content version.",
+      "corpus_ref": "google-form-short-link"
+    },
+    {
+      "id": "R06",
+      "suite": "google_forms",
+      "name": "Public Google Form",
+      "url": "https://docs.google.com/forms/d/1BB1qYRDbvWLZIuJno2IbOPtJq9G0WLfdT78d2euyWc4/viewform",
+      "url_status": "observed_2026-10-11",
+      "task": "Extract the form title and every question label in order.",
+      "required_checks": [
+        "redirect_followed",
+        "title_matches",
+        "all_questions_in_order",
+        "no_submission_made"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Residency research session 2026-10-11; prior observations in ../corpus.json",
+      "ground_truth": "Freeze expected answers from rendered page at run time; record adjudicator and content version.",
+      "corpus_ref": "google-form-edit-url-public"
+    },
+    {
+      "id": "R07",
+      "suite": "google_docs",
+      "name": "Public Google Doc (anyone with link)",
+      "url": "https://docs.google.com/document/d/141gf8P2BbiQ8ldYORTWVJciSZSwI5iE5DooJD0vc5DY/edit?usp=sharing",
+      "url_status": "observed_2026-10-11",
+      "task": "Extract the document title and full body text, including the Recording Notice section. Editor menus or outline headings alone are not a pass.",
+      "required_checks": [
+        "title_matches",
+        "body_text_present",
+        "named_section_complete",
+        "no_editor_chrome_as_content"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Residency research session 2026-10-11; prior observations in ../corpus.json",
+      "ground_truth": "Freeze expected answers from rendered page at run time; record adjudicator and content version.",
+      "corpus_ref": "google-doc-anyone-with-link"
+    },
+    {
+      "id": "R08",
+      "suite": "ticketing",
+      "name": "Eventbrite organizer page",
+      "url": "https://www.eventbrite.com/o/60020260273",
+      "url_status": "observed_2026-10-11",
+      "task": "Report the organizer name and the title and date of each upcoming event.",
+      "required_checks": [
+        "organizer_matches",
+        "upcoming_events_listed",
+        "dates_match",
+        "no_invented_events"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Residency research session 2026-10-11; prior observations in ../corpus.json",
+      "ground_truth": "Freeze expected answers from rendered page at run time; record adjudicator and content version.",
+      "corpus_ref": "eventbrite-organizer-page"
+    },
+    {
+      "id": "R09",
+      "suite": "video_metadata",
+      "name": "YouTube watch page metadata",
+      "url": "https://www.youtube.com/watch?v=Lgzj2SFYHZ4",
+      "url_status": "observed_2026-10-11",
+      "task": "Report the video title, channel name, and description opening. Playback is not required.",
+      "required_checks": [
+        "title_matches",
+        "channel_matches",
+        "description_anchor_matches",
+        "no_search_snippet_substitution"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Residency research session 2026-10-11; prior observations in ../corpus.json",
+      "ground_truth": "Freeze expected answers from rendered page at run time; record adjudicator and content version.",
+      "corpus_ref": "youtube-watch-page"
+    },
+    {
+      "id": "R10",
+      "suite": "video_metadata",
+      "name": "YouTube channel videos tab",
+      "url": "https://www.youtube.com/channel/UCxIO4V_MJjjfSsRQWJ86QLg/videos",
+      "url_status": "observed_2026-10-11",
+      "task": "List the titles of the first five videos shown, in order.",
+      "required_checks": [
+        "channel_matches",
+        "first_five_titles_in_order",
+        "no_invented_titles",
+        "correct_tab"
+      ],
+      "eligible_modes": [
+        "native_cloud_chrome",
+        "patronus_reader_browser"
+      ],
+      "profiles": [
+        "public_observed"
+      ],
+      "gate": null,
+      "pilot": false,
+      "budget_seconds": 120,
+      "source": "Residency research session 2026-10-11; prior observations in ../corpus.json",
+      "ground_truth": "Freeze expected answers from rendered page at run time; record adjudicator and content version.",
+      "corpus_ref": "youtube-channel-videos"
+    }
+  ]
+}

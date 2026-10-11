@@ -1,0 +1,44 @@
+test_actual_order_controls_balance (test_eval.EvalTests.test_actual_order_controls_balance) ... ok
+test_blocked_excluded (test_eval.EvalTests.test_blocked_excluded) ... ok
+test_budget_enforced (test_eval.EvalTests.test_budget_enforced) ... ok
+test_copied_pairs_rejected (test_eval.EvalTests.test_copied_pairs_rejected) ... ok
+test_cost_unknown_not_zero (test_eval.EvalTests.test_cost_unknown_not_zero) ... ok
+test_counterbalance (test_eval.EvalTests.test_counterbalance) ... ok
+test_deterministic (test_eval.EvalTests.test_deterministic) ... ok
+test_direction_correct (test_eval.EvalTests.test_direction_correct) ... ok
+test_duplicate_rejected (test_eval.EvalTests.test_duplicate_rejected) ... ok
+test_extra_sampling_is_exploratory (test_eval.EvalTests.test_extra_sampling_is_exploratory) ... ok
+test_false_failure_rejected (test_eval.EvalTests.test_false_failure_rejected) ... ok
+test_gap_excluded (test_eval.EvalTests.test_gap_excluded) ... ok
+test_gated_excluded (test_eval.EvalTests.test_gated_excluded) ... ok
+test_hash_mismatch_excluded (test_eval.EvalTests.test_hash_mismatch_excluded) ... ok
+test_http_in_browser_arm_rejected (test_eval.EvalTests.test_http_in_browser_arm_rejected) ... ok
+test_infra_cannot_be_site_failure (test_eval.EvalTests.test_infra_cannot_be_site_failure) ... ok
+test_intervention_recorded (test_eval.EvalTests.test_intervention_recorded) ... ok
+test_manifest_unique (test_eval.EvalTests.test_manifest_unique) ... ok
+test_missing_scorer (test_eval.EvalTests.test_missing_scorer) ... ok
+test_nan_and_bool_rejected (test_eval.EvalTests.test_nan_and_bool_rejected) ... ok
+test_native_http_rejected (test_eval.EvalTests.test_native_http_rejected) ... ok
+test_no_fake_pass (test_eval.EvalTests.test_no_fake_pass) ... ok
+test_no_unsafe_plan_side_effects (test_eval.EvalTests.test_no_unsafe_plan_side_effects) ... ok
+test_no_winner_from_pilot (test_eval.EvalTests.test_no_winner_from_pilot) ... ok
+test_no_winner_on_both_pass (test_eval.EvalTests.test_no_winner_on_both_pass) ... ok
+test_overlap_excluded (test_eval.EvalTests.test_overlap_excluded) ... ok
+test_p95_withheld_small_n (test_eval.EvalTests.test_p95_withheld_small_n) ... ok
+test_pair_reference_mismatch (test_eval.EvalTests.test_pair_reference_mismatch) ... ok
+test_reverse_direction (test_eval.EvalTests.test_reverse_direction) ... ok
+test_sample_valid (test_eval.EvalTests.test_sample_valid) ... ok
+test_schema_hash_enforced (test_eval.EvalTests.test_schema_hash_enforced) ... ok
+test_single_day_not_enough (test_eval.EvalTests.test_single_day_not_enough) ... ok
+test_timestamp_normalizes_utc (test_eval.EvalTests.test_timestamp_normalizes_utc) ... ok
+test_transport_not_site_failure (test_eval.EvalTests.test_transport_not_site_failure) ... ok
+test_unattributed_failure_rejected (test_eval.EvalTests.test_unattributed_failure_rejected) ... ok
+test_unknown_attribution_excluded (test_eval.EvalTests.test_unknown_attribution_excluded) ... ok
+test_unmatched_excluded (test_eval.EvalTests.test_unmatched_excluded) ... ok
+test_valid_empty (test_eval.EvalTests.test_valid_empty) ... ok
+test_valid_plan (test_eval.EvalTests.test_valid_plan) ... ok
+
+----------------------------------------------------------------------
+Ran 39 tests in 0.049s
+
+OK

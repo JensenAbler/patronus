@@ -1,0 +1,401 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:patronus-native-eval:observation:v1",
+  "title": "One browser eval arm",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "trial_id",
+    "observation_provenance_id",
+    "pair_id",
+    "case_id",
+    "mode",
+    "paired_modes",
+    "profile",
+    "repeat",
+    "planned_position",
+    "seed",
+    "manifest_sha256",
+    "planned_url",
+    "final_url",
+    "state",
+    "task_result",
+    "failure_stage",
+    "failure_attribution",
+    "failure_detail",
+    "checks",
+    "reference_id",
+    "reference_sha256",
+    "condition_key",
+    "comparability",
+    "started_at_utc",
+    "ended_at_utc",
+    "budget_seconds",
+    "latency_ms",
+    "time_to_first_useful_content_ms",
+    "tool_calls",
+    "retry_count",
+    "user_interventions",
+    "user_active_seconds",
+    "cost_amount",
+    "cost_currency",
+    "cost_observation_source",
+    "cost_comparable",
+    "execution",
+    "availability",
+    "evidence",
+    "download",
+    "interruption",
+    "gate_authorization_reference",
+    "fidelity",
+    "first_attempt_result",
+    "timeout",
+    "scorer",
+    "protocol_deviations",
+    "observer_notes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "trial_id": {
+      "type": "string"
+    },
+    "pair_id": {
+      "type": "string"
+    },
+    "case_id": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string"
+    },
+    "paired_modes": {
+      "type": "array"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "repeat": {
+      "type": "integer"
+    },
+    "planned_position": {
+      "type": "integer"
+    },
+    "seed": {
+      "type": "integer"
+    },
+    "manifest_sha256": {
+      "type": "string"
+    },
+    "planned_url": {
+      "type": "string"
+    },
+    "final_url": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "state": {
+      "enum": [
+        "blocked",
+        "completed",
+        "not_run",
+        "unsupported"
+      ]
+    },
+    "task_result": {
+      "enum": [
+        "fail",
+        "partial",
+        "pass",
+        "unassessed"
+      ]
+    },
+    "failure_stage": {
+      "enum": [
+        "auth",
+        "bot_challenge",
+        "connector_transport",
+        "dns",
+        "download",
+        "extraction",
+        "handoff",
+        "interaction",
+        "none",
+        "page_access",
+        "render",
+        "tls",
+        "unknown"
+      ]
+    },
+    "failure_detail": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "checks": {
+      "type": "object"
+    },
+    "reference_id": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "reference_sha256": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "condition_key": {
+      "type": "string"
+    },
+    "comparability": {
+      "type": "string"
+    },
+    "started_at_utc": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "ended_at_utc": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "budget_seconds": {
+      "type": "integer"
+    },
+    "latency_ms": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "time_to_first_useful_content_ms": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "tool_calls": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "retry_count": {
+      "type": "integer"
+    },
+    "user_interventions": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "user_active_seconds": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "cost_amount": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "cost_currency": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "cost_observation_source": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "cost_comparable": {
+      "type": "boolean"
+    },
+    "execution": {
+      "type": "object"
+    },
+    "availability": {
+      "type": "object"
+    },
+    "evidence": {
+      "type": "array"
+    },
+    "download": {
+      "type": "object"
+    },
+    "interruption": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "gate_authorization_reference": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "fidelity": {
+      "type": "object"
+    },
+    "first_attempt_result": {
+      "type": "string"
+    },
+    "timeout": {
+      "type": "boolean"
+    },
+    "scorer": {
+      "type": "object"
+    },
+    "protocol_deviations": {
+      "type": "array"
+    },
+    "observer_notes": {
+      "type": [
+        "string",
+        "number",
+        "object",
+        "array",
+        "boolean",
+        "null"
+      ]
+    },
+    "observation_provenance_id": {
+      "type": [
+        "string",
+        "number",
+        "boolean",
+        "object",
+        "array",
+        "null"
+      ]
+    },
+    "failure_attribution": {
+      "enum": [
+        "none",
+        "task_path",
+        "infrastructure",
+        "capability",
+        "policy",
+        "unknown"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "not_run"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "task_result": {
+            "const": "unassessed"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "task_result": {
+            "const": "pass"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "state": {
+            "const": "completed"
+          },
+          "failure_stage": {
+            "const": "none"
+          }
+        }
+      }
+    }
+  ]
+}

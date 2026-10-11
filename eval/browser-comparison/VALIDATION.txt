@@ -1,0 +1,7 @@
+Validated 2026-10-11 UTC
+39 offline unit tests passed
+20 scheduled pilot rows validate
+No real browser trials executed
+Empty observations summarize to zero matched pairs and no routing winners
+Six-page DOCX rendered and visually checked on every page
+The API execution adapters have not been tested during the transport outage

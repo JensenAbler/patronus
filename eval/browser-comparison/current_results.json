@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "recommendations_conditional_on": "healthy matched execution at the preregistered final sample size",
+  "operational_by_mode": {},
+  "state_counts": {},
+  "matched_pairs_included": 0,
+  "excluded_pairs": [],
+  "routing": [],
+  "cautions": [
+    "Repeated trials of one domain are not independent evidence across the web.",
+    "Latency summaries are conditional on successful completion; inspect failure timeouts separately.",
+    "Current outage and not-run rows are never site-task failures.",
+    "Per-case recommendations do not establish an engine-only causal effect."
+  ]
+}

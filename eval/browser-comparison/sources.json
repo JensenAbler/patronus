@@ -1,0 +1,50 @@
+{
+  "checked_at_utc": "2026-10-11T20:30:55Z",
+  "purpose": "Fixture discovery only, not paired browser results",
+  "textual_fetch_checks": [
+    {
+      "url": "https://httpbin.org/html",
+      "result": "content_returned"
+    },
+    {
+      "url": "https://www.w3.org/Style/Examples/011/firstcss.en.html",
+      "result": "content_returned"
+    },
+    {
+      "url": "https://www.onyxvfx.com/",
+      "result": "content_returned"
+    },
+    {
+      "url": "https://the-internet.herokuapp.com/dynamic_loading/2",
+      "result": "content_returned"
+    },
+    {
+      "url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+      "result": "content_returned"
+    },
+    {
+      "url": "https://clawcast.jensenabler.com/episodes/episode-09-v002_transcript.html",
+      "result": "tool_could_not_open",
+      "interpretation": "Unknown cause; no HTTP status, DNS, TLS, or site-unavailability inference"
+    },
+    {
+      "url": "https://jensenabler.com/",
+      "result": "tool_could_not_open",
+      "interpretation": "Unknown cause; no HTTP status, DNS, TLS, or site-unavailability inference"
+    },
+    {
+      "url": "https://vimeo.com/1534472192",
+      "result": "tool_could_not_open",
+      "interpretation": "Unknown cause; no HTTP status, DNS, TLS, or site-unavailability inference"
+    },
+    {
+      "url": "https://x.com/jordanarchivess/status/2107536262894915762",
+      "result": "tool_could_not_open",
+      "interpretation": "Unknown cause; no HTTP status, DNS, TLS, or site-unavailability inference"
+    }
+  ],
+  "excluded_control": {
+    "url": "https://example.com/",
+    "reason": "The retrieved page explicitly discourages using the service for testing and monitoring."
+  }
+}

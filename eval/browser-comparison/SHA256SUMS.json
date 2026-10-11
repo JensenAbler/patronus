@@ -1,0 +1,16 @@
+{
+  "README.txt": "14fddf1e4457e42e3ee12e6f251a053d8cce0d443db58f8e009caa3115f7132e",
+  "manifest.json": "f8b338af2a386922861fdae254e8d961fc930798c2a7e2368e2d49106b1e202c",
+  "pilot_schedule.jsonl": "e39de6e5d0256ed7098894412bbd79fa5b0fd1cc5fec90a3d22fa0375a8c92a0",
+  "observations.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "availability.json": "3f4684f529306e7d8130410d1ab14ba6275d0020021eaea7ac0e3f101bfb3e1d",
+  "sources.json": "b9c46a9271809fc354b71176a8b7f6fb39f49e096917149434a1b20fa0179d01",
+  "current_results.json": "75f94a265d304e3ddd0210bc75a57ff9299c8a029241e46c238a71d9cbf8837e",
+  "eval.py": "454e0293032e2b323db4b6a21cb53f951d190cdd241648ebe9bfffdd67fe1197",
+  "tests/test_eval.py": "4d4559f6d87d42508818f72aa348f9b3f5b2dc26d37ab102b12c4dbd67e6df1b",
+  "templates/observation.json": "92403c815396d290dbb9f61a632e755f087c994a37f3b935195fc09a9bc352d3",
+  "templates/observation.schema.json": "25c7cf7521306f8879574856fdfda98811c1ac7292c530a5fa58891ed72a802f",
+  "templates/routing_map.json": "71e538f6267a7175affc81fbf20504cccf41104e1e61e3b086e4df1e32430295",
+  "VALIDATION.txt": "c605c62f51a1e13f5485f199f863fbbfaea8338ad92d4bb731d160e2ef00bc15",
+  "test_results.txt": "a46d6f28b0c98e5e490e4fc158d8313cfe621daa897ad3e48e7404b1cec2dbfa"
+}

@@ -1,0 +1,18 @@
+{
+  "checked_at_utc": "2026-10-11T20:30:04Z",
+  "primary_comparison_executed": false,
+  "patronus": {
+    "status": "blocked_connector_transport",
+    "probe": "standalone patronus_capabilities read-only call",
+    "observed_error": "Mcp error: -32603: Internal error",
+    "job_created": false,
+    "target_site_contact_observed": false
+  },
+  "native_cloud_chrome": {
+    "status": "not_rechecked_by_eval_worker",
+    "prior_report": "Inventory/selection succeeded at 19:49 UTC; no site inspected in that check. Not a current page-access measurement."
+  },
+  "all_site_trials": "not_run",
+  "conclusion": "No measured evidence that either browser wins. Current transport outage is not a target-site failure.",
+  "root_cause": "unknown"
+}
