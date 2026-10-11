@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "instagram-profile-logged-out",
+      "url": "https://www.instagram.com/theresidencysound/",
+      "request": { "mode": "read", "rendering": "auto", "profile": "public" },
+      "expect": {
+        "outcome": "obstacle",
+        "obstacleCode": "LOGIN_REQUIRED",
+        "note": "Without a logged-in profile Instagram redirects to /accounts/login. The right answer is a clear login-required obstacle, not a generic network error."
+      },
+      "observed": [
+        { "date": "2026-10-11", "route": "patronus_start", "result": "fail", "note": "302 to /accounts/login, then 429. Reported as BROWSER_NETWORK_ERROR with a capture failure; no obstacle named." },
+        { "date": "2026-10-11", "route": "patronus_desktop navigate", "result": "fail", "note": "Human-first Chrome is not logged into Instagram; landed on login URL showing HTTP ERROR 429." }
+      ],
+      "tags": ["login-wall", "rate-limit", "social"]
+    },
+    {
+      "id": "instagram-second-profile-logged-out",
+      "url": "https://www.instagram.com/itai_music/",
+      "request": { "mode": "read", "rendering": "auto", "profile": "public" },
+      "expect": { "outcome": "obstacle", "obstacleCode": "LOGIN_REQUIRED" },
+      "observed": [
+        { "date": "2026-10-11", "route": "patronus_start", "result": "not-run", "note": "Linked from the Linktree; not attempted after the first Instagram case was blocked." }
+      ],
+      "tags": ["login-wall", "social"]
+    },
+    {
+      "id": "linktree-profile",
+      "url": "https://linktr.ee/TheResidencySound",
+      "request": { "mode": "read", "rendering": "auto" },
+      "expect": {
+        "outcome": "content",
+        "titleIncludes": ["The Residency LA"],
+        "textIncludes": ["Zula Den", "patreon.com/soundconnections", "eventbrite.com/o/60020260273"]
+      },
+      "observed": [
+        { "date": "2026-10-11", "route": "assistant web_fetch", "result": "pass", "note": "Shared link with utm/ltsid params; full link list returned." },
+        { "date": "2026-10-11", "route": "patronus_start", "result": "not-run" }
+      ],
+      "tags": ["link-in-bio", "tracking-params"]
+    },
+    {
+      "id": "patreon-creator-page",
+      "url": "https://www.patreon.com/soundconnections",
+      "request": { "mode": "read", "rendering": "browser" },
+      "expect": { "outcome": "content", "textIncludes": ["Sound Connections"] },
+      "observed": [
+        { "date": "2026-10-11", "route": "assistant web_fetch", "result": "fail", "note": "Refused: URL only appeared inside fetched page content, not as a result URL." },
+        { "date": "2026-10-11", "route": "patronus_start", "result": "not-run" }
+      ],
+      "tags": ["creator-platform"]
+    },
+    {
+      "id": "google-form-short-link",
+      "url": "https://forms.gle/CvDELqzxzBRsNsai9",
+      "request": { "mode": "read", "rendering": "auto" },
+      "expect": {
+        "outcome": "content",
+        "titleIncludes": ["Artist Participation Form"],
+        "textIncludes": ["swanning", "Press Kit", "Social handles"]
+      },
+      "observed": [
+        { "date": "2026-10-11", "route": "assistant web_fetch", "result": "fail", "note": "Refused: URL only appeared inside fetched page content." },
+        { "date": "2026-10-11", "route": "patronus_start", "result": "pass", "note": "302 to docs.google.com viewform; intro text, all questions, and embedded YouTube frame captured." }
+      ],
+      "tags": ["google-forms", "redirect", "iframe"]
+    },
+    {
+      "id": "google-form-edit-url-public",
+      "url": "https://docs.google.com/forms/d/1BB1qYRDbvWLZIuJno2IbOPtJq9G0WLfdT78d2euyWc4/viewform",
+      "request": { "mode": "read", "rendering": "auto" },
+      "expect": {
+        "outcome": "content",
+        "titleIncludes": ["Join The Residency"],
+        "textIncludes": ["Email", "Birth Date"]
+      },
+      "observed": [
+        { "date": "2026-10-11", "route": "patronus_start", "result": "pass", "note": "Linktree links the /edit URL; /viewform 301s to the /d/e/ public form and renders fully." }
+      ],
+      "tags": ["google-forms", "redirect"]
+    },
+    {
+      "id": "google-doc-anyone-with-link",
+      "url": "https://docs.google.com/document/d/141gf8P2BbiQ8ldYORTWVJciSZSwI5iE5DooJD0vc5DY/edit?usp=sharing",
+      "request": { "mode": "read", "rendering": "auto" },
+      "expect": {
+        "outcome": "content",
+        "titleIncludes": ["Swanning Guide"],
+        "textIncludes": ["Recording Notice", "4011 W Jefferson Blvd", "EPK"],
+        "note": "Body text should come back. The editor renders to a canvas, so a likely fix is rewriting public Docs links to an export or mobile view before rendering."
+      },
+      "observed": [
+        { "date": "2026-10-11", "route": "patronus_start", "result": "partial", "note": "Got title and section headings from the outline plus editor menus; no body text. Unsupported-browser banner and a 401 on the sharing frame." },
+        { "date": "2026-10-11", "route": "google drive read_file_content", "result": "pass", "note": "Full text, but four-byte emoji came back as mojibake (connector issue, not Patronus)." }
+      ],
+      "tags": ["google-docs", "canvas-render"]
+    },
+    {
+      "id": "eventbrite-organizer-page",
+      "url": "https://www.eventbrite.com/o/60020260273",
+      "request": { "mode": "read", "rendering": "auto" },
+      "expect": {
+        "outcome": "content",
+        "titleIncludes": ["ITAI & Friends"],
+        "textIncludes": ["Zula Den", "Sound Connections"]
+      },
+      "observed": [
+        { "date": "2026-10-11", "route": "patronus_start", "result": "pass", "note": "Organizer stats and upcoming Vols. 45-47 captured. Many blocked analytics subrequests, none blocking." }
+      ],
+      "tags": ["ticketing", "heavy-trackers"]
+    },
+    {
+      "id": "youtube-watch-page",
+      "url": "https://www.youtube.com/watch?v=Lgzj2SFYHZ4",
+      "request": { "mode": "read", "rendering": "auto" },
+      "expect": {
+        "outcome": "content",
+        "titleIncludes": ["Vol. 22"],
+        "textIncludes": ["MonsterLuna"]
+      },
+      "observed": [
+        { "date": "2026-10-11", "route": "patronus_start", "result": "not-run", "note": "Queued in the same multi-URL job as the Doc and Eventbrite cases; the assistant stopped paging results before reaching it. Not a confirmed Patronus failure." }
+      ],
+      "tags": ["video", "multi-url-job"]
+    },
+    {
+      "id": "youtube-channel-videos",
+      "url": "https://www.youtube.com/channel/UCxIO4V_MJjjfSsRQWJ86QLg/videos",
+      "request": { "mode": "read", "rendering": "browser" },
+      "expect": { "outcome": "content", "textIncludes": ["ITAI", "The Residency"] },
+      "observed": [
+        { "date": "2026-10-11", "route": "patronus_start", "result": "not-run", "note": "Same multi-URL job; not paged." }
+      ],
+      "tags": ["video", "multi-url-job"]
+    }
+  ],
+  "behaviors": [
+    {
+      "id": "result-empty-while-running",
+      "note": "patronus_result returns an empty list while a job is still running. Callers must check patronus_status first; a test should confirm the two states are distinguishable.",
+      "observed": [{ "date": "2026-10-11", "result": "fail", "note": "Empty content array returned for a running job with no state field in the result." }]
+    }
+  ]
+}
