@@ -121,6 +121,9 @@ test('handoff is disabled by default and cannot bypass authenticated MCP desktop
  assert.equal((await post('take')).status,200);
  const blocked=await client.callTool({name:'patronus_desktop',arguments:{action:'screenshot',idempotencyKey:'handoff-lock-fixture-001'}});
  assert.equal(blocked.structuredContent.error.code,'DESKTOP_HUMAN_CONTROL');
+ const blockedDrag=await client.callTool({name:'patronus_desktop',arguments:{action:'drag',x:10,y:20,toX:30,toY:40,idempotencyKey:'handoff-drag-blocked-001'}});
+ assert.equal(blockedDrag.structuredContent.error.code,'DESKTOP_HUMAN_CONTROL');
+
  const caps=await client.callTool({name:'patronus_capabilities',arguments:{}});
  assert.equal(caps.structuredContent.ok,true);assert.equal(caps.structuredContent.manualHandoff.controlActive,true);
  assert.equal(caps.structuredContent.manualHandoff.url,f.origin+'/patronus/handoff');
@@ -128,6 +131,10 @@ test('handoff is disabled by default and cannot bypass authenticated MCP desktop
  assert.equal((await post('finish')).status,200);
  const released=await client.callTool({name:'patronus_desktop',arguments:{action:'screenshot',idempotencyKey:'handoff-lock-fixture-002'}});
  assert.equal(released.structuredContent.ok,true);
+ const drag=await client.callTool({name:'patronus_desktop',arguments:{action:'drag',x:10,y:20,toX:30,toY:40,points:[{x:20,y:30}],durationMs:300,idempotencyKey:'handoff-drag-released-001'}});
+ assert.equal(drag.structuredContent.ok,true);assert.equal(drag.structuredContent.action,'drag');
+ assert.ok(drag.content.some(c=>c.type==='image'));
+
 });
 
 test('handoff reuses the owner verifier and shared login rate limits', async t => {

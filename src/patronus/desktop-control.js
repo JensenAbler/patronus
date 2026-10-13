@@ -19,12 +19,12 @@ export function makeRandom(seed = Date.now() >>> 0) {
 function run(cmd, args, { display, input, timeout = 15000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { env: { PATH: '/usr/bin:/bin', DISPLAY: display } });
-    let out = '', err = '';
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(fault('DESKTOP_INPUT_TIMEOUT')); }, timeout);
+    let out = '', err = '', timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeout);
     child.stdout?.on('data', d => { out += d; });
     child.stderr?.on('data', d => { err += d; });
     child.on('error', () => { clearTimeout(timer); reject(fault('DESKTOP_INPUT_FAILED')); });
-    child.on('close', code => { clearTimeout(timer); code === 0 ? resolve(out) : reject(fault('DESKTOP_INPUT_FAILED', err.slice(0, 200))); });
+    child.on('close', code => { clearTimeout(timer); timedOut ? reject(fault('DESKTOP_INPUT_TIMEOUT')) : code === 0 ? resolve(out) : reject(fault('DESKTOP_INPUT_FAILED', err.slice(0, 200))); });
     if (input !== undefined) { child.stdin.end(input); }
   });
 }
@@ -41,8 +41,8 @@ export const ALLOWED_KEYS = Object.freeze(Object.keys(KEYMAP));
 const TYPEABLE = /^[\x20-\x7e\u00a0-\uffff]*$/;
 
 export class DesktopControl {
-  constructor(desktop, { screen = DESKTOP_SCREEN, view = VIEW, now = Date.now, random = makeRandom(), captureCmd = 'ffmpeg', inputCmd = 'xdotool' } = {}) {
-    Object.assign(this, { desktop, screen, view, now, random, captureCmd, inputCmd });
+  constructor(desktop, { screen = DESKTOP_SCREEN, view = VIEW, now = Date.now, random = makeRandom(), captureCmd = 'ffmpeg', inputCmd = 'xdotool', runInput = run, pause = sleep } = {}) {
+    Object.assign(this, { desktop, screen, view, now, random, captureCmd, inputCmd, runInput, pause });
     this.cursor = { x: Math.round(screen.width / 2), y: Math.round(screen.height / 2) };
   }
 
@@ -86,6 +86,55 @@ export class DesktopControl {
     await sleep(40 + Math.floor(this.random() * 90));
     for (let i = 0; i < count; i++) { if (i) await sleep(60 + Math.floor(this.random() * 60)); await run(this.inputCmd, ['click', b], { display: this.display }); }
     return { clicked: { button, count } };
+  }
+
+  // One bounded left-button gesture in screenshot coordinates. Validate the whole
+  // path before any input and always release on the ORIGINAL display, even if
+  // desktop health changes or a movement command fails after button-down.
+  async drag({ x, y, toX, toY, points = [], durationMs = 800, button = 'left' }) {
+    if (button !== 'left') throw fault('DESKTOP_BUTTON_POLICY');
+    if (!Array.isArray(points) || points.length > 32 ||
+        !Number.isInteger(durationMs) || durationMs < 200 || durationMs > 5000)
+      throw fault('DESKTOP_DRAG_POLICY');
+    const path = [{ x, y }, ...points, { x: toX, y: toY }].map(p => {
+      if (!p || !Number.isInteger(p.x) || !Number.isInteger(p.y))
+        throw fault('DESKTOP_COORDINATE_POLICY');
+      return this.toScreen(p.x, p.y);
+    });
+    const display = this.display, started = this.now(), session = this.desktop.startedAt;
+    const send = args => {
+      if (!this.desktop.healthy()) throw fault('DESKTOP_NOT_RUNNING');
+      if (this.desktop.display !== display || this.desktop.startedAt !== session) throw fault('DESKTOP_SESSION_CHANGED');
+      const remaining = durationMs + 5000 - (this.now() - started);
+      if (remaining <= 0) throw fault('DESKTOP_INPUT_TIMEOUT');
+      return this.runInput(this.inputCmd, args, { display, timeout: Math.min(2000, remaining) });
+    };
+    await send(['mousemove', String(path[0].x), String(path[0].y)]);
+    this.cursor = { ...path[0] };
+    const steps = Math.max(1, Math.ceil(durationMs / 20 / (path.length - 1)));
+    const stepMs = durationMs / (steps * (path.length - 1));
+    let failure;
+    try {
+      // Button-down may have taken effect even if its command reports failure.
+      await send(['mousedown', '1']);
+      for (let segment = 1; segment < path.length; segment++) {
+        const from = path[segment - 1], to = path[segment];
+        for (let step = 1; step <= steps; step++) {
+          await this.pause(stepMs);
+          const t = step / steps;
+          const p = { x: Math.round(from.x + (to.x - from.x) * t),
+            y: Math.round(from.y + (to.y - from.y) * t) };
+          await send(['mousemove', String(p.x), String(p.y)]);
+          this.cursor = p;
+        }
+      }
+    } catch (error) { failure = error; }
+    finally {
+      try { await this.runInput(this.inputCmd, ['mouseup', '1'], { display, timeout: 2000 }); }
+      catch { throw fault('DESKTOP_DRAG_RELEASE_FAILED'); }
+    }
+    if (failure) throw failure;
+    return { dragged: { from: { x, y }, to: { x: toX, y: toY }, points: points.length, durationMs, button: 'left' } };
   }
 
   async scroll({ x, y, dy = 0, dx = 0 }) {

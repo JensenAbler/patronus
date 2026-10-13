@@ -111,13 +111,18 @@ export class Patronus {
   try{
    const c=this.control();
    const {action}=args;let result={};
+   if(this.desktopInputBlocked&&this.desktopInputBlocked.startedAt!==this.desktop.status().startedAt)this.desktopInputBlocked=null;
+   if(this.desktopInputBlocked&&!['screenshot','wait'].includes(action))throw fault('DESKTOP_DRAG_RELEASE_FAILED','Input is blocked until the desktop restarts because a mouse release could not be confirmed.');
    if(this.desktopSolves?.size&&!['screenshot','wait','solveCaptcha'].includes(action))throw fault('DESKTOP_SOLVER_BUSY','Cancel the active CAPTCHA job before changing the desktop.');
-   if(['click','scroll','type','key','navigate'].includes(action))this.desktopCapture=null;
+   if(['click','drag','scroll','type','key','navigate'].includes(action))this.desktopCapture=null;
    if(action==='solveCaptcha'){
     const job=await startDesktopCaptcha(this,args);result={jobId:job.jobId,solverState:job.state};
    }else if(action==='click'){
     if(!Number.isInteger(args.x)||!Number.isInteger(args.y))throw fault('DESKTOP_COORDINATE_POLICY');
     result=await c.click({x:args.x,y:args.y,button:args.button||'left',count:args.count||1});
+   }else if(action==='drag'){
+    if(args.button!==undefined&&args.button!=='left')throw fault('DESKTOP_BUTTON_POLICY');
+    result=await c.drag({x:args.x,y:args.y,toX:args.toX,toY:args.toY,points:args.points,durationMs:args.durationMs});
    }else if(action==='scroll'){
     result=await c.scroll({x:args.x,y:args.y,dx:args.dx||0,dy:args.dy||0});
    }else if(action==='type'){
@@ -140,6 +145,7 @@ export class Patronus {
    this.desktopCapture={frame,sha256:screenshotSha256,at:Date.now(),desktopStartedAt:desktop.startedAt};
    return {...result,action,screenshot:frame.toString('base64'),screenshotSha256,screenshotMimeType:'image/jpeg',viewport:{width:c.view.width,height:c.view.height},desktop};
   }catch(e){
+   if(e.code==='DESKTOP_DRAG_RELEASE_FAILED')this.desktopInputBlocked={startedAt:this.desktop?.status().startedAt};
    if(/^[A-Z][A-Z0-9_]+$/.test(e.code||''))throw e;
    throw fault('DESKTOP_ACTION_FAILED');
   }finally{this.desktopBusy=false;}
