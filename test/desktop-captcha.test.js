@@ -108,3 +108,20 @@ test('partially performed input followed by screenshot failure invalidates old f
  await assert.rejects(engine.desktopAction({action:'click',x:20,y:20,idempotencyKey:'partial-input-test'}),{code:'DESKTOP_ACTION_FAILED'});
  assert.equal(engine.desktopCapture,null);
 });
+
+test('lease release during crop prevents durable paid task creation',async t=>{
+ const {engine,args}=fixture(t);let active=true,submits=0;
+ await assert.rejects(startDesktopCaptcha(engine,args,{
+  readConfig:config,crop:async()=>{active=false;return Buffer.from('crop');},
+  assertActive:()=>{if(!active)throw Object.assign(Error(),{code:'DESKTOP_CONTROL_RELEASED'});},
+  solve:async()=>{submits++;return[];}
+ }),{code:'DESKTOP_CONTROL_RELEASED'});
+ assert.equal(submits,0);assert.equal(engine.db.prepare('SELECT count(*) AS n FROM jobs').get().n,0);
+});
+test('guarded solve recovery preserves original request even after deadline and image expire',async t=>{
+ const {engine,args}=fixture(t);args.guard={expectedDesktopStartedAt:'fixture-session',dispatchBefore:Date.now()+20000,checks:[]};
+ let submits=0;const deps={readConfig:config,crop:async()=>Buffer.from('crop'),solve:async()=>{submits++;return[{x:1,y:1}];}};
+ const job=await startDesktopCaptcha(engine,args,deps);const handle=engine.desktopSolves.get(job.jobId);if(handle)await handle.promise;
+ engine.desktopCapture=null;
+ const same=await engine.desktopAction(args);assert.equal(same.jobId,job.jobId);assert.equal(same.recovered,true);assert.equal(submits,1);
+});

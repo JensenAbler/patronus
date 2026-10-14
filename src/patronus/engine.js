@@ -1,6 +1,9 @@
 import { computerLogin } from './computer-login.js';
 import { DesktopControl } from './desktop-control.js';
-import { startDesktopCaptcha } from './desktop-captcha.js';
+import { startDesktopCaptcha, cropFrame, validateCrop } from './desktop-captcha.js';
+import { createDesktopLease } from './desktop-lease.js';
+import { typeDesktopText } from '../handoff-input.js';
+import { retainGuardedEvidence } from './desktop-evidence.js';
 import { readX10Credentials } from './login.js';
 import { readFileSync as readFileRaw, lstatSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -24,10 +27,10 @@ const digest=b=>createHash('sha256').update(b).digest('hex');
 export class Patronus {
  constructor(root,{launch=defaultLaunch,requestFn=request}={}) {
   this.root=root;this.launch=launch;this.request=requestFn;this.active=null;this.computerSessions=new Map();this.computerLogin=computerLogin;
-  this.desktop=null;this.desktopControl=null;this.desktopBusy=false;
+  this.desktop=null;this.desktopControl=null;this.desktopBusy=false;this.desktopLease=createDesktopLease();
   for(const p of ['jobs','profiles','firefox-profiles'])mkdirSync(join(root,p),{recursive:true,mode:0o700});
   this.db=new DatabaseSync(join(root,'jobs.sqlite'));
-  this.db.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, key TEXT UNIQUE, input TEXT, data TEXT);");
+  this.db.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, key TEXT UNIQUE, input TEXT, data TEXT); CREATE TABLE IF NOT EXISTS desktop_commands(key TEXT PRIMARY KEY,input TEXT,data TEXT);");
   // A service restart cannot silently replay a navigation with unknown effects.
   for(const row of this.db.prepare('SELECT * FROM jobs').all()) {
    const d=JSON.parse(row.data);
@@ -37,7 +40,7 @@ export class Patronus {
  save(d){this.db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify(d),d.jobId);}
  get(id){const r=this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);if(!r)throw fault('NOT_FOUND');return {args:JSON.parse(r.input),data:JSON.parse(r.data)};}
  status({jobId}){return this.get(jobId).data;}
- capabilities(){return {name:'Patronus',version:'0.5.0',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],browsers:[...BROWSERS],headed:'Optional per job on the service-local Xvfb display; no remote viewer.',inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'},desktop:this.desktop?this.desktop.status():{enabled:false}};}
+ capabilities(){return {name:'Patronus',version:'0.5.0',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],browsers:[...BROWSERS],headed:'Optional per job on the service-local Xvfb display; no remote viewer.',inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'},desktop:this.desktop?this.desktop.status():{enabled:false},desktopControlLease:this.desktopLease.status(),desktopControl:{nativeGuardVersion:1,readerOwnedLease:true,guardedActions:['click','drag','solveCaptcha'],replay:'Guarded native input never replays; recover the paid solver with its original key.'}};}
  login({account,timeoutSeconds=180,idempotencyKey,solveCaptchas=true,sessionOnly=false,headed=false,screenshots=false,interaction='programmatic',browser}){
   if(account!=='x10')throw fault('ACCOUNT_UNSUPPORTED');
   if(!Number.isInteger(timeoutSeconds)||timeoutSeconds<30||timeoutSeconds>(interaction==='computer-use'?900:300))throw fault('LOGIN_TIMEOUT_POLICY');
@@ -105,18 +108,66 @@ export class Patronus {
   if(!this.desktopControl||this.desktopControl.desktop!==this.desktop)this.desktopControl=new DesktopControl(this.desktop);
   return this.desktopControl;
  }
- async desktopAction(args){
+ async desktopAction(args, {leaseId,ownerText=false,expectedDesktopStartedAt} = {}){
+  return this.desktopLease.run(leaseId,context=>{
+   if(ownerText&&(args.action!=='type'||this.desktopLease.status().kind!=='owner'))throw fault('DESKTOP_OWNER_TEXT_POLICY');
+   if(expectedDesktopStartedAt!==undefined){
+    if(context.kind!=='owner')throw fault('DESKTOP_OWNER_SESSION_POLICY');
+    if(expectedDesktopStartedAt!==this.desktop?.status().startedAt)throw fault('DESKTOP_SESSION_CHANGED');
+   }
+   return this.performDesktopAction(args,{...context,ownerText});
+  });
+ }
+ async performDesktopAction(args, leaseContext={}){
   if(this.desktopBusy)throw fault('DESKTOP_BUSY','Another desktop action is in progress.');
-  this.desktopBusy=true;
+  this.desktopBusy=true;let journal;
   try{
    const c=this.control();
    const {action}=args;let result={};
+   // Resolve an existing paid task before expired guard/fresh-image checks. The
+   // original immutable request is required; recovery must not create a charge.
+   if(action==='solveCaptcha' && this.db.prepare('SELECT id FROM jobs WHERE key=?').get(args.idempotencyKey)){
+    const job=await startDesktopCaptcha(this,args);
+    return {jobId:job.jobId,solverState:job.state,recovered:true,desktop:this.desktop.status()};
+   }
+   if(args.guard){
+    if(!['click','drag','solveCaptcha'].includes(action))throw fault('DESKTOP_GUARD_POLICY');
+    const guard=args.guard, time=Date.now(), session=this.desktop.status().startedAt;
+    if(guard.expectedOwnerEpoch!==undefined&&guard.expectedOwnerEpoch!==this.desktopLease.status().ownerEpoch)throw fault('DESKTOP_OWNER_CHANGED');
+    if(!Number.isSafeInteger(guard.dispatchBefore)||guard.dispatchBefore<=time||guard.dispatchBefore>time+30000)
+     throw fault('DESKTOP_INPUT_EXPIRED');
+    if(typeof guard.expectedDesktopStartedAt!=='string'||guard.expectedDesktopStartedAt!==session)
+     throw fault('DESKTOP_SESSION_CHANGED');
+    if(!Array.isArray(guard.checks)||guard.checks.length<1||guard.checks.length>3)
+     throw fault('DESKTOP_GUARD_POLICY');
+    for(const check of guard.checks){validateCrop(check.crop,c.view);if(!/^[a-f0-9]{64}$/.test(check.sha256||''))throw fault('DESKTOP_GUARD_POLICY');}
+    if(action!=='solveCaptcha'){
+     const previous=this.db.prepare('SELECT * FROM desktop_commands WHERE key=?').get(args.idempotencyKey);
+     if(previous)throw fault(previous.input===JSON.stringify(args)?'DESKTOP_ACTION_REPLAY_BLOCKED':'IDEMPOTENCY_CONFLICT');
+     journal={state:'checking',action,session,startedAt:now()};
+     this.db.prepare('INSERT INTO desktop_commands VALUES(?,?,?)').run(args.idempotencyKey,JSON.stringify(args),JSON.stringify(journal));
+    }
+    c.inputContext={session,display:this.desktop.display,deadline:guard.dispatchBefore,signal:leaseContext.signal,assertActive:()=>{leaseContext.assertActive?.();if(guard.expectedOwnerEpoch!==undefined&&guard.expectedOwnerEpoch!==this.desktopLease.status().ownerEpoch)throw fault('DESKTOP_OWNER_CHANGED');}};
+    const frame=await c.screenshot();
+    for(const check of guard.checks){
+     const bytes=await (this.cropDesktopFrame||cropFrame)(frame,check.crop);
+     if(digest(bytes)!==check.sha256)throw fault('DESKTOP_IMAGE_CHANGED');
+    }
+    await retainGuardedEvidence(this,args,frame,'source');
+    c.assertInputAllowed?.();
+    if(Date.now()>=guard.dispatchBefore)throw fault('DESKTOP_INPUT_EXPIRED');
+    if(this.desktop.status().startedAt!==session)throw fault('DESKTOP_SESSION_CHANGED');
+    this.desktopCapture={frame,sha256:digest(frame),at:Date.now(),desktopStartedAt:session};
+    if(journal){journal.state='dispatching';journal.dispatchedAt=now();this.db.prepare('UPDATE desktop_commands SET data=? WHERE key=?').run(JSON.stringify(journal),args.idempotencyKey);}
+   }else{
+    c.inputContext={session:this.desktop.status().startedAt,display:this.desktop.display,deadline:Date.now()+300000,signal:leaseContext.signal,assertActive:leaseContext.assertActive};
+   }
    if(this.desktopInputBlocked&&this.desktopInputBlocked.startedAt!==this.desktop.status().startedAt)this.desktopInputBlocked=null;
    if(this.desktopInputBlocked&&!['screenshot','wait'].includes(action))throw fault('DESKTOP_DRAG_RELEASE_FAILED','Input is blocked until the desktop restarts because a mouse release could not be confirmed.');
-   if(this.desktopSolves?.size&&!['screenshot','wait','solveCaptcha'].includes(action))throw fault('DESKTOP_SOLVER_BUSY','Cancel the active CAPTCHA job before changing the desktop.');
+   if(this.desktopSolves?.size&&leaseContext.kind!=='owner'&&!['screenshot','wait','solveCaptcha'].includes(action))throw fault('DESKTOP_SOLVER_BUSY','Cancel the active CAPTCHA job before changing the desktop.');
    if(['click','drag','scroll','type','key','navigate'].includes(action))this.desktopCapture=null;
    if(action==='solveCaptcha'){
-    const job=await startDesktopCaptcha(this,args);result={jobId:job.jobId,solverState:job.state};
+    const job=await startDesktopCaptcha(this,args,{...(args.guard?{screenshotSha256:this.desktopCapture.sha256}:{}),assertActive:()=>{leaseContext.assertActive?.();c.assertInputAllowed?.();}});result={jobId:job.jobId,solverState:job.state};
    }else if(action==='click'){
     if(!Number.isInteger(args.x)||!Number.isInteger(args.y))throw fault('DESKTOP_COORDINATE_POLICY');
     result=await c.click({x:args.x,y:args.y,button:args.button||'left',count:args.count||1});
@@ -126,7 +177,11 @@ export class Patronus {
    }else if(action==='scroll'){
     result=await c.scroll({x:args.x,y:args.y,dx:args.dx||0,dy:args.dy||0});
    }else if(action==='type'){
-    if(args.credential){const secret=this.readDesktopSecret(args.credential);try{result=await c.typeSecret(secret);}finally{/* secret goes out of scope */}}
+    if(leaseContext.ownerText){
+     c.assertInputAllowed?.();
+     await typeDesktopText({text:args.text,display:this.desktop.display,signal:leaseContext.signal});
+     result={typed:'owner-text'};
+    }else if(args.credential){const secret=this.readDesktopSecret(args.credential);try{result=await c.typeSecret(secret);}finally{/* secret goes out of scope */}}
     else if(typeof args.text==='string'){result=await c.type(args.text);}
     else throw fault('DESKTOP_TYPE_POLICY','Provide text or a credential reference.');
    }else if(action==='key'){
@@ -141,14 +196,17 @@ export class Patronus {
    if(action!=='screenshot'&&action!=='wait')await new Promise(r=>setTimeout(r,400));
    const frame=await c.screenshot();
    if(frame.length>4194304)throw fault('DESKTOP_SCREENSHOT_LIMIT');
+   await retainGuardedEvidence(this,args,frame,'returned');
+   if(journal){journal.state='completed';journal.finishedAt=now();this.db.prepare('UPDATE desktop_commands SET data=? WHERE key=?').run(JSON.stringify(journal),args.idempotencyKey);}
    const screenshotSha256=digest(frame),desktop=this.desktop.status();
    this.desktopCapture={frame,sha256:screenshotSha256,at:Date.now(),desktopStartedAt:desktop.startedAt};
    return {...result,action,screenshot:frame.toString('base64'),screenshotSha256,screenshotMimeType:'image/jpeg',viewport:{width:c.view.width,height:c.view.height},desktop};
   }catch(e){
+   if(journal){journal.state=journal.dispatchedAt?'uncertain':'rejected';journal.code=e.code||'DESKTOP_ACTION_FAILED';this.db.prepare('UPDATE desktop_commands SET data=? WHERE key=?').run(JSON.stringify(journal),args.idempotencyKey);}
    if(e.code==='DESKTOP_DRAG_RELEASE_FAILED')this.desktopInputBlocked={startedAt:this.desktop?.status().startedAt};
    if(/^[A-Z][A-Z0-9_]+$/.test(e.code||''))throw e;
    throw fault('DESKTOP_ACTION_FAILED');
-  }finally{this.desktopBusy=false;}
+  }finally{if(this.desktopControl)this.desktopControl.inputContext=null;this.desktopBusy=false;}
  }
  start(args){
   for(const u of args.urls)safeURL(u);

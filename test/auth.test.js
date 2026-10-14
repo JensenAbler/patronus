@@ -8,7 +8,7 @@ import express from 'express';
 import { generateKeyPair, exportJWK, importJWK, SignJWT } from 'jose';
 import { createAuth } from '../src/auth.js';
 import { serve } from '../src/patronus/server.js';
-import { patronusCall } from '../src/patronus/client.js';
+import { patronusCall, patronusLease } from '../src/patronus/client.js';
 import { createApp } from '../src/gateway.js';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
@@ -33,7 +33,7 @@ async function fixture(t, { integrated = false, codingEnabled = false, handoffEn
   const options = { issuer, resourceUrl: resource, passwordHash, jwks: { keys: [jwk] }, cookieKeys: ['fixture-cookie-signing-key-that-is-very-long'], dataDirectory: directory, allowLoopback: true, codingEnabled };
   if (integrated) {
     reader=await serve({root:join(directory,'reader'),socket:join(directory,'reader.sock')});
-    service = await createApp({handoffEnabled,call:call||((action,args)=>patronusCall(action,args,{socket:join(directory,'reader.sock')})), baseUrl: `${origin}${prefix}`, dataDirectory: directory, allowLoopback: true, auth: options });
+    service = await createApp({handoffEnabled,leaseControl:(action,args)=>patronusLease(action,args,{socket:join(directory,'reader.sock')}),call:call||((action,args,options)=>patronusCall(action,args,{...options,socket:join(directory,'reader.sock')})), baseUrl: `${origin}${prefix}`, dataDirectory: directory, allowLoopback: true, auth: options });
     auth = service.auth;
   } else auth = await createAuth(options);
   t.after(async () => { await new Promise((resolve) => server.close(resolve)); if (service) await service.close(); else auth.close(); if(reader)await reader.close(); await rm(directory, { recursive: true, force: true }); });

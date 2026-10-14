@@ -2,14 +2,15 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import {createHandoff} from '../src/handoff.js';
+import {createDesktopLease} from '../src/patronus/desktop-lease.js';
 
-async function fixture(t,{call,typeText,https=false}={}) {
+async function fixture(t,{call,typeText,https=false,leaseControl}={}) {
  const app=express(), server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
  const origin='http://127.0.0.1:'+server.address().port;
  let time=1700000000000;
  const calls=[];
  const handoff=createHandoff({baseUrl:(https?'https://example.test':origin)+'/patronus',now:()=>time,
-   typeText,
+   typeText,leaseControl,
    verifyPassword:async password=>password==='fixture-only-password',
    call:call|| (async(name,args)=>{calls.push({name,args});return {screenshot:'/9j/AA==',screenshotMimeType:'image/jpeg',desktop:{startedAt:'unchanged-desktop',state:'running',display:':77'}};})});
  app.use('/patronus/handoff',handoff.router);
@@ -136,4 +137,91 @@ test('changed desktop identity is detected before any click is sent',async t=>{
 test('restarted desktop refuses continuing the old control session',async t=>{
  let n=0;const f=await fixture(t,{call:async()=>({screenshot:'a',screenshotMimeType:'image/jpeg',desktop:{startedAt:++n===1?'first':'second'}})}),b=f.browser();
  await b.login();await take(b);const r=await b.post('/frame');assert.equal(r.status,409);assert.equal((await r.json()).error,'DESKTOP_SESSION_CHANGED');
+});
+
+test('concurrent agent guards are exclusive across a compound operation',async t=>{
+ const f=await fixture(t);let finish;
+ const pending=f.handoff.guard('patronus_desktop',()=>new Promise(r=>finish=r));
+ await assert.rejects(f.handoff.guard('patronus_desktop',()=>assert.fail()),{code:'DESKTOP_BUSY'});
+ finish();await pending;
+ assert.equal(await f.handoff.guard('patronus_desktop',()=>42),42);
+});
+test('reader lease is private; Done drains native input before another owner or raw call',async t=>{
+ const reader=createDesktopLease();t.after(()=>reader.close());let finish,started;const entered=new Promise(r=>started=r);
+ const f=await fixture(t,{leaseControl:async(action,args)=>reader[action](args),call:async(name,args,options)=>{
+   if(name!=='patronus_desktop')return {desktop:{startedAt:'reader-session'}};
+   return reader.run(options?.leaseId,async()=>{started();await new Promise(r=>finish=r);return {screenshot:'private-pixels',screenshotMimeType:'image/jpeg',desktop:{startedAt:'reader-session'}};});
+ }}),a=f.browser(),b=f.browser();
+ await a.login();await b.login();const takeResponse=await a.post('/take');
+ assert.equal(takeResponse.status,200);assert.doesNotMatch(await takeResponse.text(),/leaseId/);
+ await assert.rejects(reader.run(undefined,()=>assert.fail()),{code:'DESKTOP_HUMAN_CONTROL'});
+ const pending=a.post('/frame');await entered;
+ assert.equal((await a.post('/finish')).status,200);
+ for(let n=0;n<100&&!reader.status().draining;n++)await new Promise(r=>setTimeout(r,2));
+ assert.equal(reader.status().draining,true);
+ assert.equal((await b.post('/take')).status,409);
+ await assert.rejects(reader.run(undefined,()=>assert.fail()),{code:'DESKTOP_HUMAN_CONTROL'});
+ finish();const response=await pending;assert.equal(response.status,409);
+ assert.doesNotMatch(await response.text(),/private-pixels/);
+ assert.equal((await b.post('/take')).status,200);
+});
+test('reader-routed owner text uses private envelope and never the gateway native helper',async t=>{
+ const reader=createDesktopLease();t.after(()=>reader.close());let typed;
+ const f=await fixture(t,{leaseControl:async(action,args)=>reader[action](args),typeText:()=>assert.fail('gateway must not inject text'),
+   call:async(name,args,options)=>{
+    if(name!=='patronus_desktop')return {desktop:{startedAt:'reader-session',state:'running'}};
+    return reader.run(options?.leaseId,async context=>{
+     if(args.action==='type'){assert.equal(context.kind,'owner');assert.equal(options.ownerText,true);typed=args.text;}
+     return {screenshot:'synthetic-frame',screenshotMimeType:'image/jpeg',desktop:{startedAt:'reader-session'}};
+    });
+   }}),b=f.browser();
+ await b.login();const frame=await take(b),text='synthetic private value';
+ const response=await b.post('/action',{action:'type',text,frameId:frame.frameId,sequence:frame.nextSequence});
+ assert.equal(response.status,200);assert.equal(typed,text);
+ const body=await response.text();assert.equal(body.includes(text),false);assert.equal(body.includes('leaseId'),false);
+});
+test('Done while a reader lease acquisition is pending releases it without granting control',async t=>{
+ const reader=createDesktopLease();t.after(()=>reader.close());let finish,started;const entered=new Promise(r=>started=r);
+ const f=await fixture(t,{leaseControl:async(action,args)=>{
+  if(action==='acquire'){started();await new Promise(r=>finish=r);}
+  return reader[action](args);
+ }}),b=f.browser();await b.login();
+ const pending=b.post('/take');await entered;
+ assert.equal((await b.post('/take')).status,409);
+ assert.equal((await b.post('/finish')).status,200);
+ finish();const response=await pending;assert.equal(response.status,409);
+ assert.equal(reader.status().held,false);
+ assert.equal(f.handoff.status().controlActive,false);
+});
+test('unknown call and release responses keep the native reader gate until settlement',async t=>{
+ const reader=createDesktopLease();t.after(()=>reader.close());let finish,native;
+ const f=await fixture(t,{leaseControl:async(action,args)=>{
+  const result=reader[action](args);
+  if(action==='release')throw Object.assign(Error('fixture release response lost'),{code:'BACKEND_UNAVAILABLE'});
+  return result;
+ }});
+ await assert.rejects(f.handoff.guard('patronus_desktop',leaseId=>{
+  native=reader.run(leaseId,()=>new Promise(r=>finish=r));
+  throw Object.assign(Error('fixture desktop response lost'),{code:'BACKEND_UNAVAILABLE'});
+ }),{code:'BACKEND_UNAVAILABLE'});
+ assert.equal(reader.status().draining,true);
+ assert.equal(reader.status().inFlight,true);
+ await assert.rejects(reader.run(undefined,()=>assert.fail()),{code:'DESKTOP_BUSY'});
+ await assert.rejects(f.handoff.guard('patronus_desktop',()=>assert.fail()),{code:'DESKTOP_BUSY'});
+ finish();await native;
+ assert.equal(reader.status().held,false);
+ assert.equal(await f.handoff.guard('patronus_desktop',leaseId=>reader.run(leaseId,()=>42)),42);
+});
+
+test('owner actions pin the observed desktop session in the private envelope',async t=>{
+ const reader=createDesktopLease();t.after(()=>reader.close());const seen=[];
+ const f=await fixture(t,{leaseControl:async(action,args)=>reader[action](args),call:async(name,args,options)=>{
+  if(name!=='patronus_desktop')return {desktop:{startedAt:'owner-observed-session',state:'running'}};
+  return reader.run(options.leaseId,()=>{seen.push({action:args.action,expected:options.expectedDesktopStartedAt});
+   return {screenshot:'synthetic-frame',screenshotMimeType:'image/jpeg',desktop:{startedAt:'owner-observed-session'}};});
+ }}),b=f.browser();await b.login();const frame=await take(b);
+ const response=await b.post('/action',{action:'click',x:25,y:25,frameId:frame.frameId,sequence:frame.nextSequence});
+ assert.equal(response.status,200);
+ assert.deepEqual(seen,[{action:'screenshot',expected:undefined},{action:'click',expected:'owner-observed-session'}]);
+ assert.doesNotMatch(await response.text(),/expectedDesktopStartedAt|leaseId/);
 });

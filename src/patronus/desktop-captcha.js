@@ -47,7 +47,7 @@ export function cropFrame(frame, crop) {
 }
 
 export async function startDesktopCaptcha(engine, args, {
-  crop = cropFrame, readConfig = readSolverConfig, solve = solveCoordinates, clock = Date.now, persistResult = saveResult
+  crop = cropFrame, readConfig = readSolverConfig, solve = solveCoordinates, clock = Date.now, persistResult = saveResult, screenshotSha256 = args.screenshotSha256, assertActive = () => {}
 } = {}) {
   const { idempotencyKey, ...request } = args;
   const input = JSON.stringify(request);
@@ -59,7 +59,7 @@ export async function startDesktopCaptcha(engine, args, {
   engine.desktopSolves ||= new Map();
   if (engine.desktopSolves.size) throw fault('DESKTOP_SOLVER_BUSY');
   const source = engine.desktopCapture;
-  if (!source || source.sha256 !== args.screenshotSha256 || clock() - source.at > 30000 ||
+  if (!source || source.sha256 !== screenshotSha256 || clock() - source.at > 30000 ||
       source.desktopStartedAt !== engine.desktop?.status().startedAt)
     throw fault('DESKTOP_SCREENSHOT_STALE','Inspect a fresh desktop screenshot before selecting a CAPTCHA crop.');
   const rectangle = validateCrop(args.crop, engine.control().view);
@@ -75,6 +75,7 @@ export async function startDesktopCaptcha(engine, args, {
   if (source !== engine.desktopCapture || clock() - source.at > 30000 ||
       !engine.desktop?.healthy() || source.desktopStartedAt !== engine.desktop.status().startedAt)
     throw fault('DESKTOP_SCREENSHOT_STALE');
+  assertActive();
   if (engine.desktopSolves.size) throw fault('DESKTOP_SOLVER_BUSY');
   if (!Buffer.isBuffer(image) || !image.length || image.length >= 100000)
     throw fault('DESKTOP_CAPTCHA_IMAGE_LIMIT');

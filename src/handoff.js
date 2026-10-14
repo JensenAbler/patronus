@@ -10,18 +10,30 @@ const KEYS = new Set(['Enter','Tab','Shift+Tab','Escape','Backspace','Delete','A
 const exact = (body, keys) => body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).every(key => keys.includes(key));
 
 /** Ephemeral owner-only control of the existing X11 session. No browser is created. */
-export function createHandoff({baseUrl, call, verifyPassword, typeText = typeDesktopText, now = Date.now, sessionMs = 900000, idleMs = 60000}) {
+export function createHandoff({baseUrl, call, verifyPassword, leaseControl, typeText = typeDesktopText, now = Date.now, sessionMs = 900000, idleMs = 60000}) {
   const base = new URL(baseUrl), path = base.pathname.replace(/\/$/,'') + '/handoff';
   const secure = base.protocol === 'https:';
   const cookieName = secure ? '__Secure-patronus_handoff' : 'patronus_handoff';
   const loginName = cookieName + '_login';
   const sessions = new Map(), logins = new Map();
-  let lease = null, inFlight = false, agentInFlight = 0;
+  let lease = null, inFlight = false, agentInFlight = 0, taking = false, closed = false;
+  const releases = new Set();
   const router = express.Router();
   const cookies = req => Object.fromEntries((req.headers.cookie || '').split(';').map(x => x.trim().split('=')));
   const cookie = (res, name, value, maxAge) => res.cookie(name, value, {httpOnly:true, secure, sameSite:'strict', path, maxAge});
   const clearCookie = res => cookie(res, cookieName, '', 0);
-  const release = () => { if (lease) { lease.inputController?.abort(); lease.frame = null; lease = null; } };
+  const releaseReader = leaseId => {
+    if (!leaseControl || !leaseId) return Promise.resolve();
+    // The reader drains on release. A lost response must never cause a local takeover:
+    // every later owner/agent acquire still goes through that same reader gate.
+    const pending = Promise.resolve().then(() => leaseControl('release',{leaseId})).catch(() => {}).finally(() => releases.delete(pending));
+    releases.add(pending); return pending;
+  };
+  const release = () => {
+    if (!lease) return;
+    const old = lease; lease = null; old.inputController?.abort(); old.frame = null;
+    const leaseId = old.readerLeaseId; old.readerLeaseId = null; void releaseReader(leaseId);
+  };
   const sweep = () => {
     const time = now();
     if (lease && (lease.expiresAt <= time || lease.lastSeen + idleMs <= time)) release();
@@ -83,20 +95,34 @@ export function createHandoff({baseUrl, call, verifyPassword, typeText = typeDes
       const password = req.body.password;
       if (typeof password !== 'string' || password.length > 1024 || !await verifyPassword(password,req.ip)) return loginPage(req,res.status(401),'Incorrect Patronus password');
       if (sessions.size >= 20) return res.status(429).send('Too many active sessions. Try again shortly.');
-      const id = token(), s = {csrf:token(),expiresAt:now()+sessionMs,lastSeen:now(),nextSequence:1,frame:null,desktopStartedAt:null};
+      const id = token(), s = {csrf:token(),expiresAt:now()+sessionMs,lastSeen:now(),nextSequence:1,frame:null,desktopStartedAt:null,readerLeaseId:null,ended:false};
       sessions.set(hash(id),s);
       cookie(res,cookieName,id,sessionMs);
       res.redirect(303,path);
     } catch(e) { next(e); }
   });
-  router.post('/take',origin,authorize,(req,res,next) => {
+  router.post('/take',origin,authorize,async(req,res,next) => {
+    let acquired, acquiring = false;
     try {
       const s = req.handoff;
       if (lease && lease !== s) throw fail('ANOTHER_SESSION_CONTROLS_DESKTOP');
-      if (inFlight || agentInFlight) throw fail('DESKTOP_BUSY');
+      if (inFlight || agentInFlight || taking) throw fail('DESKTOP_BUSY');
+      if (lease === s) return res.json(state(s));
+      taking = true; acquiring = true;
+      if (leaseControl) {
+        acquired = await leaseControl('acquire',{kind:'owner'});
+        if (!/^[A-Za-z0-9_-]{43}$/.test(acquired?.leaseId || '')) throw fail('BACKEND_UNAVAILABLE',502);
+        if (closed || s.ended || s.expiresAt <= now()) {
+          await releaseReader(acquired.leaseId); acquired = null; throw fail('SESSION_EXPIRED');
+        }
+        s.readerLeaseId = acquired.leaseId;
+        const expires = Date.parse(acquired.expiresAt);
+        if (Number.isFinite(expires)) s.expiresAt = Math.min(s.expiresAt,expires);
+      }
       lease = s; s.lastSeen = now();
       res.json(state(s));
     } catch(e) { next(e); }
+    finally { if (acquiring) taking = false; }
   });
   async function capture(s,args) {
     owns(s);
@@ -107,7 +133,7 @@ export function createHandoff({baseUrl, call, verifyPassword, typeText = typeDes
         const current = await call('patronus_capabilities',{});
         owns(s);
         if (!s.desktopStartedAt || current.desktop?.startedAt !== s.desktopStartedAt) { release(); s.expiresAt=now(); throw fail('DESKTOP_SESSION_CHANGED'); }
-        if (args.action === 'type') {
+        if (args.action === 'type' && !leaseControl) {
           if(current.desktop?.state!=='running')throw fail('DESKTOP_NOT_RUNNING');
           s.inputController = new AbortController();
           try { await typeText({text:args.text,display:current.desktop.display,signal:s.inputController.signal}); }
@@ -115,7 +141,11 @@ export function createHandoff({baseUrl, call, verifyPassword, typeText = typeDes
           owns(s);args.action='screenshot';
         }
       }
-      const result = await call('patronus_desktop',{...args,idempotencyKey:'human-'+token()});
+      let result;
+      try {
+        result = await call('patronus_desktop',{...args,idempotencyKey:'human-'+token()},
+          leaseControl ? {leaseId:s.readerLeaseId,...(args.action !== 'screenshot' ? {expectedDesktopStartedAt:s.desktopStartedAt} : {}),...(args.action === 'type' ? {ownerText:true} : {})} : undefined);
+      } finally { delete args.text; }
       owns(s);
       if (s.desktopStartedAt && result.desktop?.startedAt !== s.desktopStartedAt) { release(); throw fail('DESKTOP_SESSION_CHANGED'); }
       if (!result.desktop?.startedAt || typeof result.screenshot !== 'string' || result.screenshot.length > 6000000 || result.screenshotMimeType !== 'image/jpeg') throw fail('INVALID_DESKTOP_FRAME',502);
@@ -157,7 +187,7 @@ export function createHandoff({baseUrl, call, verifyPassword, typeText = typeDes
     try { owns(req.handoff); res.json(state(req.handoff)); } catch(e) { next(e); }
   });
   router.post('/finish',origin,authorize,(req,res) => {
-    const s = req.handoff;
+    const s = req.handoff; s.ended = true;
     if (lease === s) release();
     for (const [key,value] of sessions) if (value === s) sessions.delete(key);
     clearCookie(res); res.json({ended:true});
@@ -174,11 +204,22 @@ export function createHandoff({baseUrl, call, verifyPassword, typeText = typeDes
       if (name !== 'patronus_desktop') return operation();
       sweep();
       if (lease) throw fail('DESKTOP_HUMAN_CONTROL');
-      if (inFlight) throw fail('DESKTOP_BUSY');
+      if (inFlight || agentInFlight || taking || closed) throw fail('DESKTOP_BUSY');
       agentInFlight++;
-      try { return await operation(); } finally { agentInFlight--; }
+      let acquired;
+      try {
+        if (leaseControl) {
+          acquired = await leaseControl('acquire',{kind:'agent'});
+          if (!/^[A-Za-z0-9_-]{43}$/.test(acquired?.leaseId || '')) throw fail('BACKEND_UNAVAILABLE',502);
+          if (closed) throw fail('DESKTOP_BUSY');
+        }
+        return await operation(acquired?.leaseId);
+      } finally {
+        if (acquired?.leaseId) await releaseReader(acquired.leaseId);
+        agentInFlight--;
+      }
     },
-    close(){clearInterval(timer);release();sessions.clear();logins.clear();},
+    async close(){closed=true;clearInterval(timer);release();sessions.clear();logins.clear();await Promise.all([...releases]);},
   };
 }
 
