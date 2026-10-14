@@ -44,8 +44,8 @@ export const ALLOWED_KEYS = Object.freeze(Object.keys(KEYMAP));
 const TYPEABLE = /^[\x20-\x7e\u00a0-\uffff]*$/;
 
 export class DesktopControl {
-  constructor(desktop, { screen = DESKTOP_SCREEN, view = VIEW, now = Date.now, random = makeRandom(), captureCmd = 'ffmpeg', inputCmd = 'xdotool', runInput = runDesktopInput, pause = sleep } = {}) {
-    Object.assign(this, { desktop, screen, view, now, random, captureCmd, inputCmd, runInput, pause });
+  constructor(desktop, { screen = DESKTOP_SCREEN, view = VIEW, now = Date.now, random = makeRandom(), captureCmd = 'ffmpeg', inputCmd = 'xdotool', runInput = runDesktopInput, pause = sleep, capture = captureFrame } = {}) {
+    Object.assign(this, { desktop, screen, view, now, random, captureCmd, inputCmd, runInput, pause, capture });
     this.cursor = { x: Math.round(screen.width / 2), y: Math.round(screen.height / 2) };
   }
 
@@ -83,8 +83,12 @@ export class DesktopControl {
              y: clamp(Math.round(y * this.screen.height / this.view.height), this.screen.height - 1) };
   }
 
-  async screenshot() {
-    return captureFrame({ display: this.display, screen: this.screen, view: this.view, captureCmd: this.captureCmd });
+  async screenshot({ comparisonOnly = false } = {}) {
+    if (typeof comparisonOnly !== 'boolean') throw fault('DESKTOP_CAPTURE_MODE_POLICY');
+    this.assertInputAllowed();
+    const frame = await this.capture({ display: this.display, screen: this.screen, view: this.view, captureCmd: this.captureCmd, drawMouse: !comparisonOnly });
+    this.assertInputAllowed();
+    return frame;
   }
 
   // Bounded deterministic movement, with an action guard before every command.
@@ -207,10 +211,11 @@ export class DesktopControl {
 }
 
 // Buffer-returning variant: image data is binary, so screenshots bypass the string path above.
-export function captureFrame({ display, screen = DESKTOP_SCREEN, view = VIEW, captureCmd = 'ffmpeg' } = {}) {
+export function captureFrame({ display, screen = DESKTOP_SCREEN, view = VIEW, captureCmd = 'ffmpeg', drawMouse = true, spawnCapture = spawn } = {}) {
+  if (typeof drawMouse !== 'boolean') throw fault('DESKTOP_CAPTURE_MODE_POLICY');
   return new Promise((resolve, reject) => {
-    const child = spawn(captureCmd,
-      ['-loglevel', 'error', '-f', 'x11grab', '-draw_mouse', '1', '-video_size', `${screen.width}x${screen.height}`,
+    const child = spawnCapture(captureCmd,
+      ['-loglevel', 'error', '-f', 'x11grab', '-draw_mouse', drawMouse ? '1' : '0', '-video_size', `${screen.width}x${screen.height}`,
        '-i', display, '-frames:v', '1', '-vf', `scale=${view.width}:${view.height}`, '-q:v', '6', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1'],
       { env: { PATH: '/usr/bin:/bin', DISPLAY: display } });
     const chunks = []; let err = '';

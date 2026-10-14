@@ -43,6 +43,41 @@ new-challenge loop. Its timeout limits its wait, not the native process. An
 unknown response stops the attempt. The reader lease stays held/draining until
 the native operation actually settles.
 
+## Optional native-cursor-excluded comparisons
+
+Default desktop screenshots still include the native pointer. The existing
+desktop API accepts comparisonOnly:true for screenshot, or guarded click, drag
+and solveCaptcha. This changes capture only; an input or solver action still
+executes. The explicit option uses x11grab draw_mouse=0. It does not move the
+pointer, change browser content, remove page-drawn marks or suppress hover state.
+
+To use it, require capabilities.desktopControl.cursorNeutralComparison=true,
+obtain a new comparisonOnly screenshot and review a new spec with
+comparisonOnly:true. Pass comparisonOnly:true to createVerificationSession (the
+CLI reads this from the reviewed spec). Source, fresh reader guard, solver crop,
+returned frame and retained evidence then use the same capture policy. Mode
+mismatches fail closed. Never reuse cursor-inclusive baseline hashes or resume
+an already halted attempt. Exact recorded paid requests still recover without
+another solve; comparison mode is part of that immutable request.
+
+This option removes only native-pointer contamination. A page-painted circular
+X, selection overlay, hover change, tile replacement or any other changed image
+still stops remaining points. There is no changed-region mask or tolerant image
+match. The real before/after fixture does not establish whether its circular X
+is native cursor content, hover state, persistent selection or accepted input.
+
+A future pointer-away evidence probe would need an explicitly supported,
+reviewed, non-clicking guarded movement action under the same reader lease,
+session and deadline. No such desktop API action exists in this revision. Do not
+substitute a zero scroll, click, drag or direct X command. After separate approval
+and support, pair cursor-excluded captures before and after a single move to a
+reviewed neutral location, with no buttons or keys. Stop on panel/session/owner
+change; use the pair only to classify persistence, never as proof of acceptance.
+
+The isolated synthetic X11 regression can be run with
+PATRONUS_X11_CAPTURE_TEST=1 node --test test/desktop-comparison-x11.test.js.
+It creates its own temporary X display and painted window, never a browser.
+
 ## Reader-owned control
 
 The private Unix protocol owns one lease across gateway and direct-reader calls.

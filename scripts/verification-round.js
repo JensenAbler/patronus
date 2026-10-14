@@ -8,7 +8,7 @@ export async function main(argv=process.argv.slice(2)){
  if(argv.length!==3)throw Object.assign(Error('Usage: node scripts/verification-round.js REVIEWED_SPEC.json PRIVATE_EVIDENCE_DIRECTORY ATTEMPT_ID'),{code:'USAGE'});
  const [source,directory,attemptId]=argv;
  const spec=JSON.parse(readFileSync(source,'utf8'));
- const session=createVerificationSession({directory:resolve(directory),attemptId,maxRounds:1});
+ const session=createVerificationSession({directory:resolve(directory),attemptId,maxRounds:1,comparisonOnly:spec.comparisonOnly===true});
  try{
   const result=await session.runRound(spec);
   process.stdout.write(JSON.stringify({acceptance:result.acceptance,awaitingControlReview:result.awaitingControlReview,state:session.state()})+'\n');

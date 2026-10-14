@@ -30,7 +30,9 @@ export function validateVerificationSpec(spec) {
 // uses only the existing reader protocol and configured solver, never extensions.
 export function createVerificationSession({directory,attemptId,call=patronusCall,
   crop=cropFrame,readControl=async()=>[],now=()=>performance.now(),wall=Date.now,
-  maxRounds=2,timeoutMs=100000,pollMs=1200,allowAdvance=false}){
+  maxRounds=2,timeoutMs=100000,pollMs=1200,allowAdvance=false,comparisonOnly=false}){
+  if(typeof comparisonOnly!=='boolean')throw new Halt('COMPARISON_CAPTURE_POLICY');
+  const captureOptions=comparisonOnly?{comparisonOnly:true}:{};
   if(!/^[A-Za-z0-9_-]{8,80}$/.test(attemptId))throw new Halt('INVALID_ATTEMPT_ID');
   if(allowAdvance)throw new Halt('LIVE_ADVANCE_VALIDATION_REQUIRED');
   // Real Next/Verify positive fixtures have not been validated. The production
@@ -40,13 +42,16 @@ export function createVerificationSession({directory,attemptId,call=patronusCall
   const key=kind=>attemptId+':'+kind+':'+(++sequence);
   const journalPath=join(directory,attemptId+'.jsonl');
   const record=event=>appendFileSync(journalPath,JSON.stringify(event)+'\n',{mode:0o600});
-  const guard=frame=>({challengeEvidence:true,expectedOwnerEpoch:ownerEpoch,expectedDesktopStartedAt:spec.session,dispatchBefore:wall()+20000,
+  // The reader requires integer epoch milliseconds. Floor the final bound so
+  // fractional monotonic time never extends validity or fails the wire schema.
+  const guard=frame=>({challengeEvidence:true,expectedOwnerEpoch:ownerEpoch,expectedDesktopStartedAt:spec.session,dispatchBefore:Math.floor(wall()+20000),
     checks:[{crop:spec.anchorRectangle,sha256:frame.anchorHash},{crop:spec.image,sha256:frame.imageHash},{crop:spec.controlRectangle,sha256:frame.controlHash}]});
   async function inspect(raw){
+    if((raw?.comparisonOnly===true)!==comparisonOnly)throw new Halt('COMPARISON_CAPTURE_UNAVAILABLE');
     if(typeof raw?.screenshot!=='string'||raw.screenshotMimeType!=='image/jpeg')throw new Halt('INVALID_READER_FRAME');
     const bytes=Buffer.from(raw.screenshot,'base64');
     const anchorHash=hash(await crop(bytes,spec.anchorRectangle));
-    const frame={bytes,session:raw.desktop?.startedAt,screenshotSha256:raw.screenshotSha256,
+    const frame={bytes,session:raw.desktop?.startedAt,screenshotSha256:raw.screenshotSha256,...captureOptions,
       panelPresent:anchorHash===spec.anchorHash,anchorVerified:anchorHash===spec.anchorHash,anchorHash,
       panelRectangle:spec.panelRectangle,controlRectangle:spec.controlRectangle};
     if(frame.panelPresent){
@@ -61,7 +66,8 @@ export function createVerificationSession({directory,attemptId,call=patronusCall
     atomicOwnerGuard:true,now,utc,record,preserve,
     lease:async()=>{
       const state=await call('patronus_capabilities',{});
-      if(state.desktopControl?.nativeGuardVersion!==1||state.desktopControl?.readerOwnedLease!==true)
+      if(state.desktopControl?.nativeGuardVersion!==1||state.desktopControl?.readerOwnedLease!==true||
+        (comparisonOnly&&state.desktopControl?.cursorNeutralComparison!==true))
         throw new Halt('NATIVE_CONTROL_GUARD_UNAVAILABLE');
       const observedEpoch=state.desktopControlLease?.ownerEpoch;
       if(!Number.isSafeInteger(observedEpoch)||observedEpoch<0)throw new Halt('NATIVE_CONTROL_GUARD_UNAVAILABLE');
@@ -69,9 +75,9 @@ export function createVerificationSession({directory,attemptId,call=patronusCall
       if(ownerEpoch!==observedEpoch)throw new Halt('OWNER_TOOK_CONTROL');
       return {active:state.desktopControlLease?.held!==false,session:state.desktop?.startedAt,observedAtMs:now()};
     },
-    capture:async()=>inspect(await call('patronus_desktop',{action:'screenshot',idempotencyKey:key('capture')})),
+    capture:async()=>inspect(await call('patronus_desktop',{action:'screenshot',...captureOptions,idempotencyKey:key('capture')})),
     startSolve:async source=>{
-      const args={action:'solveCaptcha',crop:spec.image,instructions:spec.instructions,
+      const args={action:'solveCaptcha',...captureOptions,crop:spec.image,instructions:spec.instructions,
         screenshotSha256:source.screenshotSha256,timeoutSeconds:Math.max(30,Math.min(300,Math.ceil(timeoutMs/1000))),
         guard:guard(source),idempotencyKey:attemptId+':solve:'+round};
       // Exact immutable request is persisted before spending; use it for recovery.
@@ -83,13 +89,14 @@ export function createVerificationSession({directory,attemptId,call=patronusCall
     status:async jobId=>{
       const result=await call('patronus_status',{jobId});
       // Status returns state, unlike desktop solve-start's solverState.
+      if((result.desktopCaptcha?.comparisonOnly===true)!==comparisonOnly)throw new Halt('COMPARISON_CAPTURE_UNAVAILABLE');
       return {state:result.state,session:result.desktopCaptcha?.desktopStartedAt,
         imageHash:result.desktopCaptcha?.imageSha256,points:result.desktopCaptcha?.points};
     },
     sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
     input:async(action,expected)=>{
-      const args={action:action.type==='drag'?'drag':'click',idempotencyKey:key('input'),
-        guard:{challengeEvidence:true,expectedOwnerEpoch:ownerEpoch,expectedDesktopStartedAt:expected.session,dispatchBefore:Math.min(wall()+20000,wall()+Math.max(0,expected.dispatchBeforeMs-now())),
+      const args={action:action.type==='drag'?'drag':'click',...captureOptions,idempotencyKey:key('input'),
+        guard:{challengeEvidence:true,expectedOwnerEpoch:ownerEpoch,expectedDesktopStartedAt:expected.session,dispatchBefore:Math.floor(wall()+Math.min(20000,Math.max(0,expected.dispatchBeforeMs-now()))),
           checks:[{crop:spec.anchorRectangle,sha256:expected.anchorHash},{crop:spec.image,sha256:expected.imageHash},{crop:spec.controlRectangle,sha256:expected.controlHash}]}};
       if(action.type==='drag')Object.assign(args,{x:action.from.x,y:action.from.y,toX:action.to.x,toY:action.to.y});
       else if(action.type==='click')Object.assign(args,action.point);
@@ -103,6 +110,7 @@ export function createVerificationSession({directory,attemptId,call=patronusCall
     if(runner.state().inFlight)throw new Halt('RUNNER_BUSY');
     if(runner.state().halted)throw new Halt('RUNNER_HALTED');
     validateVerificationSpec(reviewedSpec);
+    if((reviewedSpec.comparisonOnly===true)!==comparisonOnly)throw new Halt('COMPARISON_BASELINE_REQUIRED');
     if(!started){
       mkdirSync(directory,{recursive:true,mode:0o700});
       // Existing attempts, including unknown/lost responses, cannot be restarted.

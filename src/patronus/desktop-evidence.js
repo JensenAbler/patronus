@@ -14,7 +14,7 @@ export async function retainGuardedEvidence(engine,args,frame,phase){
  const anchor=await crop(frame,checks[0].crop),matched=hash(anchor)===checks[0].sha256;
  const directory=join(engine.root,'desktop-evidence',hash(args.idempotencyKey));
  mkdirSync(directory,{recursive:true,mode:0o700});
- const metadata={phase,at:new Date().toISOString(),session:engine.desktop.status().startedAt,anchorMatched:matched,crops:[]};
+ const metadata={phase,at:new Date().toISOString(),session:engine.desktop.status().startedAt,...(args.comparisonOnly===true?{comparisonOnly:true}:{}),anchorMatched:matched,crops:[]};
  if(matched){
   for(let i=0;i<checks.length;i++){
    const bytes=i===0?anchor:await crop(frame,checks[i].crop),name=phase+'-'+['anchor','image','control'][i]+'.jpg';

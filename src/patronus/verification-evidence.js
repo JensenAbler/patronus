@@ -12,6 +12,7 @@ export function createEvidenceWriter({ directory, attemptId, encodeCrop, utc }) 
     if (!/^[A-Za-z0-9:_-]{1,100}$/.test(phase)) throw Error('INVALID_PHASE');
     const stem = `${attemptId}-${String(++sequence).padStart(3, '0')}-${phase.replaceAll(':', '_')}`;
     const metadata = { utc: utc(), phase, sequence, panelPresent: frame.panelPresent === true,
+      ...(frame.comparisonOnly === true ? { comparisonOnly: true } : {}),
       session: frame.session, imageHash: frame.imageHash, anchorHash: frame.anchorHash,
       controlHash: frame.controlHash, control: ['Skip', 'Next', 'Verify'].includes(frame.controlLabel) ? frame.controlLabel : null };
     if (frame.panelPresent === true && frame.anchorVerified === true) {

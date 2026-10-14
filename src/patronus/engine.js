@@ -40,7 +40,7 @@ export class Patronus {
  save(d){this.db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify(d),d.jobId);}
  get(id){const r=this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);if(!r)throw fault('NOT_FOUND');return {args:JSON.parse(r.input),data:JSON.parse(r.data)};}
  status({jobId}){return this.get(jobId).data;}
- capabilities(){return {name:'Patronus',version:'0.5.0',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],browsers:[...BROWSERS],headed:'Optional per job on the service-local Xvfb display; no remote viewer.',inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'},desktop:this.desktop?this.desktop.status():{enabled:false},desktopControlLease:this.desktopLease.status(),desktopControl:{nativeGuardVersion:1,readerOwnedLease:true,guardedActions:['click','drag','solveCaptcha'],replay:'Guarded native input never replays; recover the paid solver with its original key.'}};}
+ capabilities(){return {name:'Patronus',version:'0.5.0',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],browsers:[...BROWSERS],headed:'Optional per job on the service-local Xvfb display; no remote viewer.',inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'},desktop:this.desktop?this.desktop.status():{enabled:false},desktopControlLease:this.desktopLease.status(),desktopControl:{nativeGuardVersion:1,readerOwnedLease:true,cursorNeutralComparison:true,guardedActions:['click','drag','solveCaptcha'],replay:'Guarded native input never replays; recover the paid solver with its original key.'}};}
  login({account,timeoutSeconds=180,idempotencyKey,solveCaptchas=true,sessionOnly=false,headed=false,screenshots=false,interaction='programmatic',browser}){
   if(account!=='x10')throw fault('ACCOUNT_UNSUPPORTED');
   if(!Number.isInteger(timeoutSeconds)||timeoutSeconds<30||timeoutSeconds>(interaction==='computer-use'?900:300))throw fault('LOGIN_TIMEOUT_POLICY');
@@ -124,11 +124,15 @@ export class Patronus {
   try{
    const c=this.control();
    const {action}=args;let result={};
+   if(args.comparisonOnly!==undefined&&typeof args.comparisonOnly!=='boolean')throw fault('DESKTOP_CAPTURE_MODE_POLICY');
+   const comparisonOnly=args.comparisonOnly===true;
+   if(comparisonOnly&&(action!=='screenshot'&&(!['click','drag','solveCaptcha'].includes(action)||!args.guard)))
+    throw fault('DESKTOP_CAPTURE_MODE_POLICY');
    // Resolve an existing paid task before expired guard/fresh-image checks. The
    // original immutable request is required; recovery must not create a charge.
    if(action==='solveCaptcha' && this.db.prepare('SELECT id FROM jobs WHERE key=?').get(args.idempotencyKey)){
     const job=await startDesktopCaptcha(this,args);
-    return {jobId:job.jobId,solverState:job.state,recovered:true,desktop:this.desktop.status()};
+    return {jobId:job.jobId,solverState:job.state,recovered:true,...(comparisonOnly?{comparisonOnly:true}:{}),desktop:this.desktop.status()};
    }
    if(args.guard){
     if(!['click','drag','solveCaptcha'].includes(action))throw fault('DESKTOP_GUARD_POLICY');
@@ -148,7 +152,7 @@ export class Patronus {
      this.db.prepare('INSERT INTO desktop_commands VALUES(?,?,?)').run(args.idempotencyKey,JSON.stringify(args),JSON.stringify(journal));
     }
     c.inputContext={session,display:this.desktop.display,deadline:guard.dispatchBefore,signal:leaseContext.signal,assertActive:()=>{leaseContext.assertActive?.();if(guard.expectedOwnerEpoch!==undefined&&guard.expectedOwnerEpoch!==this.desktopLease.status().ownerEpoch)throw fault('DESKTOP_OWNER_CHANGED');}};
-    const frame=await c.screenshot();
+    const frame=await c.screenshot({comparisonOnly});
     for(const check of guard.checks){
      const bytes=await (this.cropDesktopFrame||cropFrame)(frame,check.crop);
      if(digest(bytes)!==check.sha256)throw fault('DESKTOP_IMAGE_CHANGED');
@@ -157,7 +161,7 @@ export class Patronus {
     c.assertInputAllowed?.();
     if(Date.now()>=guard.dispatchBefore)throw fault('DESKTOP_INPUT_EXPIRED');
     if(this.desktop.status().startedAt!==session)throw fault('DESKTOP_SESSION_CHANGED');
-    this.desktopCapture={frame,sha256:digest(frame),at:Date.now(),desktopStartedAt:session};
+    this.desktopCapture={frame,sha256:digest(frame),at:Date.now(),desktopStartedAt:session,comparisonOnly};
     if(journal){journal.state='dispatching';journal.dispatchedAt=now();this.db.prepare('UPDATE desktop_commands SET data=? WHERE key=?').run(JSON.stringify(journal),args.idempotencyKey);}
    }else{
     c.inputContext={session:this.desktop.status().startedAt,display:this.desktop.display,deadline:Date.now()+300000,signal:leaseContext.signal,assertActive:leaseContext.assertActive};
@@ -194,13 +198,13 @@ export class Patronus {
    }else if(action!=='screenshot')throw fault('DESKTOP_ACTION_POLICY');
    // Let the page settle, then always return a fresh view.
    if(action!=='screenshot'&&action!=='wait')await new Promise(r=>setTimeout(r,400));
-   const frame=await c.screenshot();
+   const frame=await c.screenshot({comparisonOnly});
    if(frame.length>4194304)throw fault('DESKTOP_SCREENSHOT_LIMIT');
    await retainGuardedEvidence(this,args,frame,'returned');
    if(journal){journal.state='completed';journal.finishedAt=now();this.db.prepare('UPDATE desktop_commands SET data=? WHERE key=?').run(JSON.stringify(journal),args.idempotencyKey);}
    const screenshotSha256=digest(frame),desktop=this.desktop.status();
-   this.desktopCapture={frame,sha256:screenshotSha256,at:Date.now(),desktopStartedAt:desktop.startedAt};
-   return {...result,action,screenshot:frame.toString('base64'),screenshotSha256,screenshotMimeType:'image/jpeg',viewport:{width:c.view.width,height:c.view.height},desktop};
+   this.desktopCapture={frame,sha256:screenshotSha256,at:Date.now(),desktopStartedAt:desktop.startedAt,comparisonOnly};
+   return {...result,action,...(comparisonOnly?{comparisonOnly:true}:{}),screenshot:frame.toString('base64'),screenshotSha256,screenshotMimeType:'image/jpeg',viewport:{width:c.view.width,height:c.view.height},desktop};
   }catch(e){
    if(journal){journal.state=journal.dispatchedAt?'uncertain':'rejected';journal.code=e.code||'DESKTOP_ACTION_FAILED';this.db.prepare('UPDATE desktop_commands SET data=? WHERE key=?').run(JSON.stringify(journal),args.idempotencyKey);}
    if(e.code==='DESKTOP_DRAG_RELEASE_FAILED')this.desktopInputBlocked={startedAt:this.desktop?.status().startedAt};

@@ -59,6 +59,8 @@ export async function startDesktopCaptcha(engine, args, {
   engine.desktopSolves ||= new Map();
   if (engine.desktopSolves.size) throw fault('DESKTOP_SOLVER_BUSY');
   const source = engine.desktopCapture;
+  if (Boolean(source?.comparisonOnly) !== (args.comparisonOnly === true))
+    throw fault('DESKTOP_CAPTURE_MODE_CHANGED');
   if (!source || source.sha256 !== screenshotSha256 || clock() - source.at > 30000 ||
       source.desktopStartedAt !== engine.desktop?.status().startedAt)
     throw fault('DESKTOP_SCREENSHOT_STALE','Inspect a fresh desktop screenshot before selecting a CAPTCHA crop.');
@@ -87,6 +89,7 @@ export async function startDesktopCaptcha(engine, args, {
     solverAttempts: [],
     desktopCaptcha: { crop: rectangle, screenshotSha256: source.sha256, imageSha256: sha(image),
       instructions: args.instructions, desktopStartedAt: source.desktopStartedAt,
+      ...(args.comparisonOnly === true ? { comparisonOnly: true } : {}),
       acceptance: 'unverified', points: [] }
   };
   mkdirSync(join(engine.root,'jobs',d.jobId), { recursive: true, mode: 0o700 });
