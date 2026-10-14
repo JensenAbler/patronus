@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Temporary Lever verification metadata",
+  "version": "0.1.0",
+  "description": "Manually armed, prospective-only diagnostic for one Huckleberry application. No storage or network permissions.",
+  "devtools_page": "devtools.html",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'none'"
+  }
+}

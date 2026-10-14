@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Verification metadata</title><link rel="stylesheet" href="panel.css"></head>
+<body><h1>Temporary verification metadata</h1>
+<p>Only the Huckleberry application ending 871ce846-02d4-43c5-b54c-426060fc08c4 and its hCaptcha requests, while this panel is armed. Prospective only: no old requests are recovered.</p>
+<p>Chrome delivers inspected-tab events to this panel; its code rejects other URLs before reading metadata or verification fields. This is a code allowlist, not a Chrome site-permission restriction.</p>
+<p>No request/response contents, headers, cookies, URLs, applicant fields, tokens, or hashes are shown, saved, or sent. hCaptcha response bodies are never read. Token age stays unknown. A false repeat result means only “not seen during this armed session.” Missing/unavailable verification fields remain unknown.</p>
+<button id="arm" type="button">Arm for this application (15 minutes)</button>
+<button id="stop" type="button">Stop and clear</button>
+<p id="state" role="status">Stopped</p>
+<h2>Lever application POST</h2><pre id="lever">[]</pre>
+<h2>hCaptcha requests (timing/status only)</h2><pre id="hcaptcha">[]</pre>
+<script type="module" src="panel.js"></script></body></html>
