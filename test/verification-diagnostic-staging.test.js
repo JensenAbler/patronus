@@ -8,7 +8,13 @@ spec=importlib.util.spec_from_file_location("stage","scripts/stage-verification-
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 with tempfile.TemporaryDirectory() as tmp:
  base=pathlib.Path(tmp)/"diagnostics"
- target=module.stage(".", "a"*40, base=base)
+ previous_umask=os.umask(0o077)
+ try: target=module.stage(".", "a"*40, base=base)
+ finally: os.umask(previous_umask)
+ assert base.stat().st_mode & 0o777 == 0o750
+ os.chmod(base,0o700)
+ assert module.stage(".", "a"*40, base=base) == target
+ assert base.stat().st_mode & 0o777 == 0o750
  assert set(p.name for p in target.iterdir()) == set(module.FILES)
  assert module.stage(".", "a"*40, base=base) == target
  assert (target/"manifest.json").stat().st_mode & 0o777 == 0o640

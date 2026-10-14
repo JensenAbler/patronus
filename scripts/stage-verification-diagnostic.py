@@ -41,6 +41,22 @@ def stage(source, revision, base=BASE, owner=None):
         base.mkdir(mode=0o750)
         if owner:
             os.chown(base, owner[0], owner[1])
+    expected_owner = owner or (os.getuid(), os.getgid())
+    info = base.stat()
+    if (info.st_uid, info.st_gid) != expected_owner:
+        raise ValueError("Unexpected staging base owner")
+    if info.st_mode & 0o777 != 0o750:
+        # A restrictive caller umask can make our new static-only base 0700.
+        # Repair only this directory, never an ancestor, profile, or data path.
+        if info.st_mode & 0o777 != 0o700:
+            raise ValueError("Unexpected staging base permissions")
+        for child in base.iterdir():
+            if (child.is_symlink() or not child.is_dir() or
+                    not re.fullmatch(r"lever-verification-[0-9a-f]{40}", child.name) or
+                    set(p.name for p in child.iterdir()) != set(FILES) or
+                    any(p.is_symlink() or not p.is_file() for p in child.iterdir())):
+                raise ValueError("Staging base contains unexpected material")
+        os.chmod(base, 0o750)
     target = base / ("lever-verification-" + revision)
     if target.exists() or target.is_symlink():
         if target.is_symlink() or not target.is_dir() or set(p.name for p in target.iterdir()) != set(FILES):
