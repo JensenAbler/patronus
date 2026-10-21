@@ -49,7 +49,7 @@ test('starts display, window manager and Chrome on a private persistent profile 
   assert.equal(spawned[2].opts.env.DISPLAY, ':42');
   assert.ok(spawned[2].args.includes('--user-data-dir=' + join(root, 'desktop-profile')));
   assert.equal(statSync(join(root, 'desktop-profile')).mode & 0o777, 0o700);
-  assert.deepEqual(proxies[0].options, { maxBytes: Infinity, anyPort: true });
+  assert.deepEqual(proxies[0].options, { maxBytes: Infinity, anyPort: true, routes: [] });
   assert.ok(desktop.healthy());
   await desktop.stop();
   assert.deepEqual(spawned.map(c => c.signals[0]), ['SIGTERM', 'SIGTERM', 'SIGTERM']);

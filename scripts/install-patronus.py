@@ -66,6 +66,8 @@ Environment=PLAYWRIGHT_BROWSERS_PATH={target}/browsers
 Environment=HOME=/var/lib/patronus
 Environment=PATRONUS_DESKTOP=1
 Environment=PATRONUS_NATIVE_DESKTOP=1
+# Optional owner egress routes, e.g. PATRONUS_EGRESS_ROUTES=benefitscal.com=http://127.0.0.1:1056
+EnvironmentFile=-/etc/patronus/egress.env
 UMask=0077
 RuntimeDirectory=patronus
 RuntimeDirectoryMode=0750

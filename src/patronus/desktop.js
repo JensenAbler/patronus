@@ -1,7 +1,7 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { startProxy as defaultProxy, fault } from './network.js';
+import { startProxy as defaultProxy, fault, parseRoutes } from './network.js';
 
 // Chrome records an unclean exit in its profile and then shows a "Restore pages?"
 // bubble over every page. Marking the last exit clean before launch keeps the
@@ -75,7 +75,7 @@ export class Desktop {
   status() {
     return { enabled: true, state: this.state, browser: 'google-chrome', automationInterface: 'none',
       screen: { ...this.screen }, display: this.display, startedAt: this.startedAt,
-      restartsLastTenMinutes: this.recentRestarts(), ...(this.lastError ? { lastError: this.lastError } : {}) };
+      restartsLastTenMinutes: this.recentRestarts(), routedHosts: this.routedHosts || [], ...(this.lastError ? { lastError: this.lastError } : {}) };
   }
 
   recentRestarts() {
@@ -104,7 +104,10 @@ export class Desktop {
       this.display = await readDisplay(display, this.displayTimeoutMs);
       const env = { ...this.env, DISPLAY: this.display };
       this.children.windowManager = this.spawn('openbox', ['--sm-disable'], { env, stdio: 'ignore' });
-      this.proxy = await this.startProxy({ maxBytes: Infinity, anyPort: true });
+      // Optional owner routes (PATRONUS_EGRESS_ROUTES) send chosen sites out another way.
+      const routes = parseRoutes(this.env.PATRONUS_EGRESS_ROUTES);
+      this.routedHosts = routes.flatMap(route => route.hosts);
+      this.proxy = await this.startProxy({ maxBytes: Infinity, anyPort: true, routes });
       markCleanExit(this.profile);
       this.children.chrome = this.spawn(this.chrome,
         chromeArgs({ profile: this.profile, proxy: this.proxy.url, screen: this.screen }), { env, stdio: 'ignore' });
