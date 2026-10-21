@@ -25,13 +25,10 @@ test('Linux UA and high entropy metadata follow the running browser version',()=
  }
  assert.throws(()=>chromiumIdentity({product:'Chrome/154.0.0.0',userAgent:'Windows'}));
 });
-test('read navigation omits incidental no-cache but retains other headers and routing',async()=>{
- let result;
- const req={method:()=> 'GET',resourceType:()=> 'document',allHeaders:async()=>({pragma:'no-cache','cache-control':'no-cache',accept:'text/html',cookie:'test=1'})};
- await continueBrowserRequest({request:()=>req,continue:async o=>{result=o;}},browserRequestPolicy(req));
- assert.deepEqual(result.headers,{accept:'text/html',cookie:'test=1'});
- req.allHeaders=async()=>({'cache-control':'max-age=0'});
- await continueBrowserRequest({request:()=>req,continue:async o=>{result=o;}},browserRequestPolicy(req));
- assert.equal(result.headers['cache-control'],'max-age=0');
+test('navigation preserves browser header order and routing while forms remain blocked',async()=>{
+ let supplied='unset';
+ const req={method:()=> 'GET',resourceType:()=> 'document'};
+ await continueBrowserRequest({request:()=>req,continue:async options=>{supplied=options;}},browserRequestPolicy(req));
+ assert.equal(supplied,undefined);
  req.method=()=> 'POST';assert.equal(browserRequestPolicy(req).reason,'FORM_SUBMISSION_POLICY');
 });
