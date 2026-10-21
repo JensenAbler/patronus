@@ -9,32 +9,14 @@ const request=(body={query:'query Calendar { events { title } }'},overrides={})=
  resourceType:()=> 'fetch',frame:()=>({url:()=> 'https://calendar.example/calendar'}),
  headers:()=>({'content-type':'application/json; charset=utf-8'}),postData:()=>JSON.stringify(body),...overrides
 });
-test('GraphQL queries are allowed only with inspectable same-origin HTTPS bodies',()=>{
- for(const body of [
-  {query:'{ events { title } }'},
-  {query:'query Calendar($id: ID!) { event(id:$id) { ...Fields } } fragment Fields on Event { title }',variables:{id:'1'},operationName:'Calendar'},
-  {query:'query A { one } query B { two }',operationName:'B'}
- ])assert.equal(browserRequestPolicy(request(body)).kind,'graphql-query');
- for(const body of [
-  {query:'mutation { buyTicket }'}, {query:'subscription { messages }'},
-  {query:'query A { title } mutation B { deleteAccount }',operationName:'A'},
-  {query:'query A { title }',operationName:'Wrong'},
-  {query:'query A { title } query B { title }'},
-  {query:'mutation { x } # query { safe }'}, {query:'not valid'},
-  [{query:'{ title }'}],{extensions:{persistedQuery:{sha256Hash:'opaque'}}},
-  {query:'{title}',extensions:{}},{query:'{title}',variables:[]},
-  {query:'{title}',operationName:3},{query:'{title}',unexpected:'action'}
- ])assert.equal(browserRequestPolicy(request(body)).allowed,false,JSON.stringify(body));
- for(const overrides of [
-  {method:()=> 'PUT'},{method:()=> 'DELETE'},{resourceType:()=> 'document'},
-  {url:()=> 'https://evil.example/graphql-public'},
-  {url:()=> 'https://calendar.example/checkout'},
-  {url:()=> 'http://calendar.example/graphql-public'},
-  {headers:()=>({'content-type':'application/x-www-form-urlencoded'})},
-  {postData:()=>'{bad'}, {postData:()=>JSON.stringify({query:' '.repeat(262144)+'{title}'})},
-  {frame:()=>{throw Error('no frame');}}
- ])assert.equal(browserRequestPolicy(request(undefined,overrides)).allowed,false);
- assert.equal(browserRequestPolicy(request(undefined,{method:()=> 'GET'})).allowed,true);
+test('Page-issued requests load; only body-carrying navigations (form submissions) are blocked',()=>{
+ for(const overrides of [{},{method:()=> 'PUT'},{resourceType:()=> 'xhr'},{resourceType:()=> 'ping'},
+  {url:()=> 'https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/flow'},
+  {headers:()=>({'content-type':'application/x-www-form-urlencoded'})},{resourceType:()=>{throw Error('gone');}}
+ ])assert.equal(browserRequestPolicy(request(undefined,overrides)).allowed,true,JSON.stringify(Object.keys(overrides)));
+ for(const method of ['POST','PUT','DELETE'])assert.deepEqual(
+  browserRequestPolicy(request(undefined,{method:()=>method,resourceType:()=> 'document'})),{allowed:false,reason:'FORM_SUBMISSION_POLICY'});
+ assert.equal(browserRequestPolicy(request(undefined,{method:()=> 'GET',resourceType:()=> 'document'})).allowed,true);
 });
 test('Request diagnostics omit all bodies, headers, and query-string values',()=>{
  const d=blockedRequest(request({password:'DO-NOT-LOG'},{
