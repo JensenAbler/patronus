@@ -44,8 +44,9 @@ export function launchConfig({browser,headed=false,proxy,userAgent,permissions,v
  if(permissions)config.permissions=permissions;
  if(userAgent)config.userAgent=userAgent;
  if(viewport)config.viewport=viewport;
+ else if(browserKind({browser})==='chromium')config.viewport=null;
  if(browserKind({browser})==='firefox')config.firefoxUserPrefs={...firefoxPrefs};
- else Object.assign(config,{channel:'chrome',chromiumSandbox:true,ignoreDefaultArgs:['--enable-automation'],args:[...(headed?['--disable-gpu']:[]),...chromiumArgs]});
+ else Object.assign(config,{channel:'chrome',chromiumSandbox:true,ignoreDefaultArgs:['--enable-automation'],args:[...(headed?['--disable-gpu']:[]),...chromiumArgs,'--enable-speech-dispatcher','--window-size=1920,1080',...(!headed?['--screen-info={1920x1080}']:[])]});
  return config;
 }
 

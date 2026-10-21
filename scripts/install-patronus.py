@@ -52,7 +52,7 @@ for p in ['/var/lib/patronus','/run/patronus']:
 if not shutil.which('xvfb-run') or not shutil.which('xauth'): raise SystemExit('Install xvfb and xauth before activation')
 # The persistent desktop session runs stock Google Chrome; Ubuntu's own loaded AppArmor
 # profile (/etc/apparmor.d/chrome) grants its sandbox user namespaces, so none is added here.
-for tool in ['google-chrome','Xvfb','openbox']:
+for tool in ['google-chrome','Xvfb','openbox','pulseaudio','speech-dispatcher']:
  if not shutil.which(tool): raise SystemExit('Install '+tool+' before activation (desktop session)')
 unit=f"""[Unit]
 Description=Patronus persistent web reader
@@ -61,10 +61,11 @@ After=network-online.target
 Type=simple
 User=patronus
 Group=patronus
-ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x1024x24 -nolisten tcp" /usr/bin/node {target}/src/patronus/server.js
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1920x1080x24 -nolisten tcp" /usr/bin/node {target}/src/patronus/server.js
 Environment=PLAYWRIGHT_BROWSERS_PATH={target}/browsers
 Environment=HOME=/var/lib/patronus
 Environment=PATRONUS_DESKTOP=1
+Environment=PATRONUS_NATIVE_DESKTOP=1
 UMask=0077
 RuntimeDirectory=patronus
 RuntimeDirectoryMode=0750

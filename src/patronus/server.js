@@ -4,10 +4,12 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Patronus } from './engine.js';
 import { Desktop } from './desktop.js';
+import { startDesktopEnvironment } from './desktop-environment.js';
 import { patronusTools } from './schema.js';
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(k => keys.includes(k));
 const validLease = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 export async function serve({root='/var/lib/patronus',socket='/run/patronus/api.sock'}={}) {
+ const desktopEnvironment=process.env.PATRONUS_NATIVE_DESKTOP==='1'?await startDesktopEnvironment():null;
  const engine=new Patronus(root);
  // The persistent human-first browser runs only where the installer enables it.
  if(process.env.PATRONUS_DESKTOP==='1'){engine.desktop=new Desktop({root});engine.desktop.start().catch(()=>console.error('patronus_desktop_start_failed'));}
@@ -39,7 +41,7 @@ export async function serve({root='/var/lib/patronus',socket='/run/patronus/api.
  await new Promise(r=>server.listen(socket,r));chmodSync(socket,0o660);
  const timer=setInterval(()=>engine.tick().catch(()=>console.error('patronus_tick_failed')),500);
  const desktopTimer=engine.desktop?setInterval(()=>engine.desktop.ensure().catch(()=>console.error('patronus_desktop_ensure_failed')),15000):null;
- return {engine,server,close:async()=>{clearInterval(timer);clearInterval(desktopTimer);engine.desktopLease.close();await new Promise(r=>server.close(r));await engine.desktop?.stop();await engine.close();}};
+ return {engine,server,close:async()=>{clearInterval(timer);clearInterval(desktopTimer);engine.desktopLease.close();await new Promise(r=>server.close(r));await engine.desktop?.stop();await engine.close();await desktopEnvironment?.stop();}};
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  const svc=await serve({root:process.env.PATRONUS_DATA_DIR,socket:process.env.PATRONUS_SOCKET});let closing=false;
