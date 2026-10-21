@@ -342,7 +342,6 @@ export class Patronus {
      await route.abort().catch(()=>{});
     }
    });
-   await context.routeWebSocket('**/*',ws=>ws.close());
    page=context.pages()[0]||await context.newPage();
    tracker=trackRequests(page);
    page.on('dialog',dialog=>dialog.dismiss());

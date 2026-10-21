@@ -1,10 +1,8 @@
 import { displayURL, fault } from './network.js';
 
-// Read mode never types, clicks or submits, so the only write it could make is a
-// navigation that carries a body (a form submission or a 307 replaying one). Block
-// those. Everything else a page issues on its own while loading (fetch/XHR POSTs,
-// beacons, anti-bot challenge handshakes, framework data calls) is allowed: blocking
-// it broke ordinary sites (Linktree, Patreon, Google Forms) in the 2026-10-21 evals.
+// Read mode never types, clicks or submits. Page-initiated traffic, including
+// fetch/XHR POSTs, beacons and WebSockets, is allowed. Only body-carrying
+// navigations (form submissions and redirects replaying them) stay blocked.
 export function browserRequestPolicy(req) {
  const method=req.method();
  if(['GET','HEAD'].includes(method))return {allowed:true,kind:'safe-method'};

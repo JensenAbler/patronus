@@ -204,7 +204,6 @@ export async function x10Login(engine,d,args,signal) {
     if(diagnostic.blocked.length<50)diagnostic.blocked.push({...blockedRequest(route.request(),code),at:new Date().toISOString(),stage});
     engine.save(d);await route.abort().catch(()=>{}); }
   });
-  await context.routeWebSocket('**/*',ws=>ws.close());
   page=context.pages()[0]||await context.newPage();
   stopTracking=trackLoginResponses(page,record);
   page.on('dialog',dialog=>dialog.dismiss());

@@ -90,7 +90,9 @@ export async function startProxy({signal,maxBytes,onBytes=()=>{},anyPort=false}=
   server.on('connect',async(req,client,head)=>{
     try{
       const {address,u}=await resolvePublic('https://'+req.url,lookup,{anyPort});
-      if(!anyPort && u.port && u.port!=='443')throw fault('PORT_POLICY');
+      // Chrome tunnels both ws:// (80) and wss:// (443) through CONNECT.
+      // resolvePublic already enforces public addresses and the same 80/443
+      // port policy as ordinary retrieval. Received frames are counted below.
       const upstream=net.connect({host:address,port:Number(u.port)||443});
       // Closing an idle upstream must also close the browser's tunnel; otherwise
       // it can reuse a socket that can no longer receive a response.
