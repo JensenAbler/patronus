@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Save, list or remove Patronus logins. Run as root on Alpha.
+#   patronus-save-login save      prompts for site name, address, username/email, password (hidden)
+#   patronus-save-login list      shows saved sites and which fields they have (never values)
+#   patronus-save-login remove S  deletes site S
+# Files: /var/lib/patronus/accounts/<site>.json, owner patronus, mode 0600.
+set -euo pipefail
+DIR=/var/lib/patronus/accounts
+[ "$(id -u)" = 0 ] || { echo "Run as root (sudo)." >&2; exit 1; }
+install -d -m 700 -o patronus -g patronus "$DIR"
+case "${1:-}" in
+ save)
+  read -rp "Site name (lowercase, e.g. benefitscal): " SITE
+  [[ "$SITE" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || { echo "Use lowercase letters, digits and hyphens." >&2; exit 1; }
+  read -rp "Login page address (e.g. https://benefitscal.com): " ORIGIN
+  read -rp "Username or email: " LOGIN
+  read -rsp "Password (hidden): " PASS; echo
+  read -rsp "Password again: " PASS2; echo
+  [ "$PASS" = "$PASS2" ] || { echo "Passwords didn't match; nothing saved." >&2; exit 1; }
+  SITE="$SITE" ORIGIN="$ORIGIN" LOGIN="$LOGIN" PASS="$PASS" DIR="$DIR" python3 - <<'EOF'
+import json, os, tempfile
+from urllib.parse import urlsplit
+u = urlsplit(os.environ['ORIGIN'].strip())
+if u.scheme != 'https' or not u.hostname:
+    raise SystemExit('Address must start with https://')
+origin = f"https://{u.hostname}" + (f":{u.port}" if u.port else '')
+login = os.environ['LOGIN']
+data = {'origin': origin, 'username': login, 'password': os.environ['PASS']}
+if '@' in login:
+    data['email'] = login
+dest = os.path.join(os.environ['DIR'], os.environ['SITE'] + '.json')
+fd, tmp = tempfile.mkstemp(dir=os.environ['DIR'])
+with os.fdopen(fd, 'w') as f:
+    json.dump(data, f)
+os.chmod(tmp, 0o600)
+import pwd
+pw = pwd.getpwnam('patronus')
+os.chown(tmp, pw.pw_uid, pw.pw_gid)
+os.replace(tmp, dest)
+print(f"Saved {os.environ['SITE']} for {origin}. Reference it as {os.environ['SITE']}:username / :password")
+EOF
+  unset PASS PASS2
+  ;;
+ list)
+  DIR="$DIR" python3 - <<'EOF'
+import json, os
+d = os.environ['DIR']
+for name in sorted(os.listdir(d)):
+    if not name.endswith('.json'):
+        continue
+    try:
+        v = json.load(open(os.path.join(d, name)))
+    except Exception:
+        print(f"{name[:-5]:20} (unreadable)"); continue
+    print(f"{name[:-5]:20} {v.get('origin', '(no address: re-save to use with the vault)'):40} fields: {', '.join(k for k in v if k != 'origin')}")
+EOF
+  ;;
+ remove)
+  SITE="${2:-}"
+  [[ "$SITE" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || { echo "Usage: patronus-save-login remove <site>" >&2; exit 1; }
+  rm -f "$DIR/$SITE.json" && echo "Removed $SITE."
+  ;;
+ *)
+  sed -n '2,6p' "$0"; exit 1;;
+esac

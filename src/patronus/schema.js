@@ -39,7 +39,7 @@ export const patronusTools={
    button:z.enum(['left','middle','right']).optional(),count:z.number().int().min(1).max(3).optional(),
    text:z.string().max(2000).optional(),key:z.string().max(20).optional(),
    dx:z.number().int().min(-50).max(50).optional(),dy:z.number().int().min(-50).max(50).optional(),
-   url:z.string().url().max(8192).optional(),credential:z.enum(['x10-email','x10-password','directadmin-password']).optional(),
+   url:z.string().url().max(8192).optional(),credential:z.string().regex(/^(x10-email|x10-password|directadmin-password|[a-z0-9][a-z0-9-]{0,40}:(username|email|password))$/).optional(),
    screenshotSha256:z.string().regex(/^[a-f0-9]{64}$/).optional(),
    crop:obj({x:z.number().int().min(0).max(1279),y:z.number().int().min(0).max(719),width:z.number().int().min(20).max(600),height:z.number().int().min(20).max(600)}).optional(),
    instructions:z.string().min(1).max(280).optional(),timeoutSeconds:z.number().int().min(30).max(300).optional(),

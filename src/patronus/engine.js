@@ -101,6 +101,21 @@ export class Patronus {
    if(typeof value.password!=='string'||!value.password)throw fault('CREDENTIAL_INVALID');
    return value.password;
   }
+  // General login vault: accounts/<site>.json holds {origin, username|email, password}.
+  // A reference is '<site>:<field>'. Secrets are typed only when the last desktop
+  // navigation went to the saved origin, so page text cannot steer them elsewhere.
+  const vault=/^([a-z0-9][a-z0-9-]{0,40}):(username|email|password)$/.exec(String(reference||''));
+  if(vault){
+   const path=join(this.root,'accounts',vault[1]+'.json');
+   let st;try{st=lstatSync(path);}catch{throw fault('CREDENTIAL_MISSING');}
+   if(!st.isFile()||st.isSymbolicLink()||(st.mode&0o077)||st.size>16384)throw fault('CREDENTIAL_FILE_POLICY');
+   let value;try{value=JSON.parse(readFileRaw(path,'utf8'));}catch{throw fault('CREDENTIAL_INVALID');}
+   let origin;try{origin=new URL(value.origin).origin;}catch{throw fault('CREDENTIAL_ORIGIN_MISSING');}
+   if(this.desktopNavigatedOrigin!==origin)throw fault('CREDENTIAL_ORIGIN_POLICY','Navigate to the saved site before typing its credentials.');
+   const secret=value[vault[2]];
+   if(typeof secret!=='string'||!secret)throw fault('CREDENTIAL_INVALID');
+   return secret;
+  }
   throw fault('CREDENTIAL_UNKNOWN');
  }
  control(){
@@ -193,7 +208,9 @@ export class Patronus {
     result=await c.pressKey(args.key);
    }else if(action==='navigate'){
     if(!args.url)throw fault('DESKTOP_NAVIGATE_POLICY');
+    this.desktopNavigatedOrigin=null;
     result=await c.navigate(args.url);
+    try{this.desktopNavigatedOrigin=new URL(args.url).origin;}catch{}
    }else if(action==='wait'){
     await new Promise(r=>setTimeout(r,1500));result={waited:true};
    }else if(action!=='screenshot')throw fault('DESKTOP_ACTION_POLICY');
