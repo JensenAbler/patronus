@@ -1,0 +1,48 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mirror</title>
+<style>:root{color-scheme:light dark}body{font:15px system-ui;max-width:46rem;margin:1.5rem auto;padding:0 1rem}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;background:#8881;padding:.8rem;border-radius:6px}</style>
+<h1>Mirror</h1><p id="state">Looking…</p><pre id="out"></pre>
+<script>
+(async()=>{
+const r={token:'__TOKEN__',errors:[]};
+const safe=async(k,f)=>{try{r[k]=await f();}catch(e){r.errors.push(k+': '+e.message);}};
+const nav=navigator;
+const nativeFn=f=>typeof f==='function'&&/\{\s*\[native code\]\s*\}$/.test(Function.prototype.toString.call(f));
+await safe('navigator',()=>({userAgent:nav.userAgent,platform:nav.platform,vendor:nav.vendor,language:nav.language,languages:nav.languages,
+ hardwareConcurrency:nav.hardwareConcurrency,deviceMemory:nav.deviceMemory,maxTouchPoints:nav.maxTouchPoints,cookieEnabled:nav.cookieEnabled,
+ pdfViewerEnabled:nav.pdfViewerEnabled,doNotTrack:nav.doNotTrack,
+ plugins:[...nav.plugins].map(p=>p.name),mimeTypes:[...nav.mimeTypes].map(m=>m.type),
+ pluginsIsPluginArray:nav.plugins instanceof PluginArray}));
+await safe('webdriver',()=>{const own=Object.getOwnPropertyDescriptor(nav,'webdriver');const proto=Object.getOwnPropertyDescriptor(Navigator.prototype,'webdriver');
+ return {value:nav.webdriver,ownPropertyOnNavigator:!!own,onPrototype:!!proto,getterIsNative:proto?nativeFn(proto.get):null};});
+await safe('userAgentData',async()=>nav.userAgentData?{brands:nav.userAgentData.brands,mobile:nav.userAgentData.mobile,platform:nav.userAgentData.platform,
+ high:await nav.userAgentData.getHighEntropyValues(['architecture','bitness','model','platformVersion','fullVersionList','wow64'])}:null);
+await safe('screen',()=>({width:screen.width,height:screen.height,availWidth:screen.availWidth,availHeight:screen.availHeight,colorDepth:screen.colorDepth,
+ devicePixelRatio,innerWidth,innerHeight,outerWidth,outerHeight,screenX,screenY}));
+await safe('intl',()=>({timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,locale:Intl.DateTimeFormat().resolvedOptions().locale,tzOffsetMin:new Date().getTimezoneOffset()}));
+await safe('webgl',()=>{const c=document.createElement('canvas');const g=c.getContext('webgl')||c.getContext('experimental-webgl');if(!g)return null;
+ const d=g.getExtension('WEBGL_debug_renderer_info');return {vendor:g.getParameter(g.VENDOR),renderer:g.getParameter(g.RENDERER),
+ unmaskedVendor:d?g.getParameter(d.UNMASKED_VENDOR_WEBGL):null,unmaskedRenderer:d?g.getParameter(d.UNMASKED_RENDERER_WEBGL):null};});
+await safe('canvasHash',async()=>{const c=document.createElement('canvas');c.width=240;c.height=60;const x=c.getContext('2d');x.textBaseline='top';x.font='16px Arial';
+ x.fillStyle='#f60';x.fillRect(10,10,100,30);x.fillStyle='#069';x.fillText('Mirror ✓ 🦢',4,20);const b=new TextEncoder().encode(c.toDataURL());
+ const h=await crypto.subtle.digest('SHA-256',b);return [...new Uint8Array(h)].slice(0,8).map(v=>v.toString(16).padStart(2,'0')).join('');});
+await safe('fonts',()=>{const test=['Arial','Helvetica','Times New Roman','Courier New','Verdana','Georgia','Segoe UI','Calibri','San Francisco','Helvetica Neue','Menlo','Roboto','Ubuntu','DejaVu Sans','Liberation Sans','Noto Sans','Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji'];
+ const s=document.createElement('span');s.textContent='mmmmmmmmmmlli';s.style.cssText='position:absolute;left:-9999px;font-size:72px';document.body.appendChild(s);
+ const w=f=>{s.style.fontFamily=f;return s.offsetWidth;};const base=['monospace','serif','sans-serif'].map(w);
+ const found=test.filter(f=>['monospace','serif','sans-serif'].some((b,i)=>w(`'${f}',${b}`)!==base[i]));s.remove();return found;});
+await safe('mediaDevices',async()=>{if(!nav.mediaDevices?.enumerateDevices)return null;const d=await nav.mediaDevices.enumerateDevices();const k={};for(const x of d)k[x.kind]=(k[x.kind]||0)+1;return k;});
+await safe('speechVoices',()=>new Promise(res=>{const v=speechSynthesis.getVoices();if(v.length)return res(v.length);speechSynthesis.onvoiceschanged=()=>res(speechSynthesis.getVoices().length);setTimeout(()=>res(speechSynthesis.getVoices().length),1500);}));
+await safe('permissions',async()=>({notificationPermission:typeof Notification!=='undefined'?Notification.permission:null,
+ notificationsQuery:(await nav.permissions.query({name:'notifications'})).state}));
+await safe('chromeObject',()=>window.chrome?{keys:Object.keys(window.chrome),runtime:!!window.chrome.runtime,loadTimes:typeof window.chrome.loadTimes,csi:typeof window.chrome.csi}:null);
+await safe('automationGlobals',()=>Object.getOwnPropertyNames(window).filter(n=>/^(__playwright|__pw|__puppeteer|cdc_|\$cdc_|_phantom|callPhantom|domAutomation|__webdriver|__selenium|__driver|__nightmare|_Selenium|__lastWatirAlert|__fxdriver)/i.test(n)));
+await safe('cdpRuntimeLeak',()=>{let hit=false;const e=new Error();Object.defineProperty(e,'stack',{get(){hit=true;return '';}});console.debug(e);return hit;});
+await safe('misc',()=>({historyLength:history.length,referrer:document.referrer,hasFocus:document.hasFocus(),visibility:document.visibilityState,
+ battery:'getBattery' in nav,connection:nav.connection?{effectiveType:nav.connection.effectiveType,rtt:nav.connection.rtt}:null,
+ iframeWebdriver:(()=>{const f=document.createElement('iframe');f.style.display='none';document.body.appendChild(f);const v=f.contentWindow.navigator.webdriver;f.remove();return v;})()}));
+let server=null;
+try{server=await (await fetch('__PREFIX__/report',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(r)})).json();}catch(e){r.errors.push('report: '+e.message);}
+document.getElementById('state').textContent=server?.ok?'Recorded as "'+server.label+'". MIRROR_DONE':'Could not record. MIRROR_DONE';
+document.getElementById('out').textContent=JSON.stringify({seen_by_page:r,headers_seen_by_server:server?.pageHeaders},null,1);
+})();
+</script></html>

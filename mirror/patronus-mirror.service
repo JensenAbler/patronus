@@ -1,0 +1,22 @@
+[Unit]
+Description=Patronus mirror (records what sites can see about a visitor)
+After=network.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=patronus-mirror
+Environment=PORT=8807
+Environment=MIRROR_DATA=/var/lib/patronus-mirror
+ExecStart=/usr/bin/node /srv/patronus-mirror/server.js
+Restart=always
+RestartSec=3
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+
+[Install]
+WantedBy=multi-user.target
