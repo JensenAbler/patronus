@@ -15,6 +15,7 @@ import { Transform } from 'node:stream';
 import { defaultLaunch, launchConfig, profileDir, browserKind, BROWSERS } from './launch.js';
 import { request, safeURL, displayURL, fault, startProxy, resolvePublic, agent } from './network.js';
 import { extract } from './extract.js';
+import { rejectChallengePage } from './challenge-page.js';
 import { browserError } from './browser-errors.js';
 import { addWarning, requestWarning, mainNavigation, networkReason } from './warnings.js';
 import { browserRequestPolicy, blockedRequest, continueBrowserRequest } from './browser-policy.js';
@@ -375,8 +376,9 @@ export class Patronus {
    const code=response?.status()||0;
    if(code>=400){await this.browserFailure(page,response,d,args,'HTTP_ERROR');throw fault(code===401?'AUTH_REQUIRED':code===403?'ACCESS_DENIED':code===402?'PAYMENT_REQUIRED':code===429?'RATE_LIMIT':'HTTP_ERROR','HTTP '+code);}
    stage='extraction';
-   const html=await page.content(),final=page.url(),out=extract(html,final);
-   if(/^(just a moment|access denied|verify you are human)/i.test(out.title.trim())){await this.browserFailure(page,response,d,args,'CHALLENGE');throw fault('CHALLENGE','The challenge remains unresolved; this widget may require unsupported verification.');}
+   const html=await page.content(),final=page.url();
+   rejectChallengePage(html,final,page.frames().map(f=>f.url()));
+   const out=extract(html,final);
    if(await page.locator('input[type=password]').count())out.coverage.possibleLoginPage=true;
    out.url=displayURL(final);out.route='browser';out.coverage.readiness=readiness;
    out.frames=[];
@@ -462,6 +464,7 @@ export class Patronus {
       else{
        const r=await this.bytes(raw,d,args,controller.signal);
        if(!r.mime.startsWith('text/')&&!['application/json','application/xml','application/xhtml+xml'].includes(r.mime))throw fault('BINARY_RESOURCE','Use download mode to retrieve this resource as a file.');
+       if(r.mime.includes('html'))rejectChallengePage(r.body.toString('utf8'),r.url);
        out=r.mime.includes('html')?extract(r.body.toString('utf8'),r.url):{markdown:r.body.toString('utf8'),images:[],links:[],coverage:{scope:'HTTP response text'}};
        out.url=displayURL(r.url);out.route='http';
        for(const im of out.images.slice(0,10)){try{im.artifactId=(await this.bytes(im.url,d,args,controller.signal,{file:true,name:im.id})).artifact.artifactId;}catch(e){im.retrievalError=e.code||'IMAGE_UNAVAILABLE';}}
@@ -472,7 +475,7 @@ export class Patronus {
       if(out.images.some(i=>!i.artifactId)||out.coverage.framesOmitted||out.coverage.frameErrors||out.coverage.possibleLoginPage)addWarning(d,{code:'COVERAGE_WARNING',url:displayURL(raw),message:'Some auxiliary coverage is missing or the page contains a password field. Inspect content and coverage before deciding whether the objective is blocked.'});
      }
      output.push(out);d.pages.push({url:out.url,title:out.title||'',route:out.route});
-    }catch(e){d.obstacles.push({url:displayURL(raw),code:controller.signal.aborted?(controller.signal.reason.code||'CANCELLED'):(e.code||'RETRIEVAL_ERROR'),message:e.code&&/^[A-Z_]+$/.test(e.code)?e.message.slice(0,160):'Retrieval failed; no credentials or untrusted exception text exposed.'});}
+    }catch(e){d.obstacles.push({url:displayURL(raw),code:controller.signal.aborted?(controller.signal.reason.code||'CANCELLED'):(e.code||'RETRIEVAL_ERROR'),...(e.code==='CHALLENGE_PAGE'&&e.reason?{reason:e.reason}:{}),message:e.code&&/^[A-Z_]+$/.test(e.code)?e.message.slice(0,160):'Retrieval failed; no credentials or untrusted exception text exposed.'});}
     persist();
    }
    d.state=controller.signal.aborted?(controller.signal.reason.code==='CANCELLED'?'cancelled':output.length?'partial':'failed'):d.obstacles.length?(output.length?'partial':'failed'):'succeeded';

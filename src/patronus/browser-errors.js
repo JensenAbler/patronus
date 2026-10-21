@@ -3,6 +3,7 @@ import { fault } from './network.js';
 // Inspect exception text locally; expose only stable, credential-free codes.
 export function browserError(error,stage,signal) {
  if(signal?.aborted)return fault(signal.reason?.code||'CANCELLED');
+ if(error?.code==='CHALLENGE_PAGE'&&['VERIFICATION_INTERSTITIAL','CLOUDFLARE_CHALLENGE','HCAPTCHA_CHALLENGE','RECAPTCHA_CHALLENGE','DATADOME_CHALLENGE','VENDOR_CHALLENGE'].includes(error.reason))return Object.assign(fault('CHALLENGE_PAGE'),{reason:error.reason});
  if(/^[A-Z][A-Z0-9_]+$/.test(error?.code||''))return fault(error.code);
  const text=String(error?.message||'');
  if(stage==='launch')return fault('BROWSER_LAUNCH_FAILED');
