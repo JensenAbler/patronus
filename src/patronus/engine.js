@@ -318,7 +318,7 @@ export class Patronus {
   const solver=configuredSolver(this,args);
   const proxy=await startProxy({signal,maxBytes:args.maxBytes-d.bytes,onBytes:n=>{d.bytes+=n-observedBytes;observedBytes=n;}});
   try{
-   context=await this.launch({path:profile,browser,config:launchConfig({browser,headed:args.headed,proxy,permissions:[],userAgent:agent})});
+   context=await this.launch({path:profile,browser,config:launchConfig({browser,headed:args.headed,proxy})});
    if(signal.aborted)throw signal.reason;
    signal.addEventListener('abort',()=>context.close().catch(()=>{}),{once:true});
    if(solver){solver.apiKey='';await context.addInitScript(captureWidgets);}

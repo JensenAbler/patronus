@@ -12,7 +12,7 @@ const proxy={url:'http://127.0.0.1:1'};
 
 test('launch policy keeps Chromium flags and gives Firefox equivalent prefs',()=>{
  const c=launchConfig({proxy,permissions:[],userAgent:'ua'});
- assert.equal(c.channel,'chromium');assert.equal(c.chromiumSandbox,true);assert.equal(c.headless,true);
+ assert.equal(c.channel,'chrome');assert.equal(c.chromiumSandbox,true);assert.equal(c.headless,true);
  assert.ok(c.args.includes('--disable-quic'));assert.ok(!c.args.includes('--disable-gpu'));assert.equal(c.firefoxUserPrefs,undefined);
  assert.ok(launchConfig({headed:true,proxy}).args.includes('--disable-gpu'));
  const f=launchConfig({browser:'firefox',headed:true,proxy,permissions:[],userAgent:'ua'});

@@ -24,7 +24,18 @@ export function blockedRequest(req,reason) {
 // A permitted POST must not be redirected outside the inspected endpoint.
 // route.fetch uses the browser context's proxy; maxRedirects=0 prevents replay.
 export async function continueBrowserRequest(route,decision){
- if(!['graphql-query','captcha-verification'].includes(decision.kind))return route.continue();
+ if(!['graphql-query','captcha-verification'].includes(decision.kind)){
+  const req=route.request();
+  // Routing must remain enabled for form/network/budget enforcement. Keep its
+  // cache disabled, but omit Chromium's incidental revalidation headers on reads.
+  if(req.resourceType()==='document'&&['GET','HEAD'].includes(req.method())){
+   const headers=await req.allHeaders();
+   if(headers.pragma==='no-cache')delete headers.pragma;
+   if(headers['cache-control']==='no-cache')delete headers['cache-control'];
+   return route.continue({headers});
+  }
+  return route.continue();
+ }
  const response=await route.fetch({maxRedirects:0,timeout:30000});
  try{
   if(response.status()>=300&&response.status()<400)throw fault('POST_REDIRECT_POLICY');

@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { chromium, firefox } from 'playwright';
 
 export const BROWSERS=['chromium','firefox'];
-const chromiumArgs=['--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--disable-background-networking'];
+const chromiumArgs=['--disable-blink-features=AutomationControlled','--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--disable-background-networking'];
 
 // Firefox counterparts of the Chromium flags above, plus background services that would
 // otherwise spend the job's byte budget or open channels outside page routing.
@@ -45,10 +45,36 @@ export function launchConfig({browser,headed=false,proxy,userAgent,permissions,v
  if(userAgent)config.userAgent=userAgent;
  if(viewport)config.viewport=viewport;
  if(browserKind({browser})==='firefox')config.firefoxUserPrefs={...firefoxPrefs};
- else Object.assign(config,{channel:'chromium',chromiumSandbox:true,args:[...(headed?['--disable-gpu']:[]),...chromiumArgs]});
+ else Object.assign(config,{channel:'chrome',chromiumSandbox:true,ignoreDefaultArgs:['--enable-automation'],args:[...(headed?['--disable-gpu']:[]),...chromiumArgs]});
  return config;
 }
 
-export function defaultLaunch(options){
- return (browserKind(options)==='firefox'?firefox:chromium).launchPersistentContext(options.path,options.config);
+// Keep Chromium's native brand/GREASE lists. CDP fills omitted brand fields from
+// the running binary, including fullVersionList; never pretend Chromium is Chrome.
+export function chromiumIdentity(version){
+ if(!/Linux/.test(version.userAgent))throw new Error('Expected a Linux browser');
+ const fullVersion=version.product.split('/')[1];
+ if(!/^\d+\.\d+\.\d+\.\d+$/.test(fullVersion))throw new Error('Invalid browser version');
+ return {userAgent:version.userAgent.replace('HeadlessChrome/','Chrome/'),platform:'Linux x86_64',
+  userAgentMetadata:{platform:'Linux',platformVersion:'',architecture:'x86',model:'',
+   mobile:false,bitness:'64',wow64:false,fullVersion}};
+}
+
+export async function defaultLaunch(options){
+ const isFirefox=browserKind(options)==='firefox';
+ const context=await (isFirefox?firefox:chromium).launchPersistentContext(options.path,options.config);
+ if(isFirefox)return context;
+ try{
+  const page=context.pages()[0]||await context.newPage();
+  const session=await context.newCDPSession(page);
+  const identity=chromiumIdentity(await session.send('Browser.getVersion'));
+  await session.send('Emulation.setUserAgentOverride',identity);
+  // Keep the CDP session attached: detaching resets its emulation overrides.
+  context.on('page',async next=>{
+   try{const s=await context.newCDPSession(next);await s.send('Emulation.setUserAgentOverride',identity);}
+   // Download-only targets can disappear before a CDP session attaches.
+   catch{if(!next.isClosed())await next.close().catch(()=>{});}
+  });
+  return context;
+ }catch(error){await context.close();throw error;}
 }

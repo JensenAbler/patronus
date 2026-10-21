@@ -182,7 +182,7 @@ export async function x10Login(engine,d,args,signal) {
  const solver=args.sessionOnly?null:configuredSolver(engine,args);
  const proxy=await startProxy({signal,maxBytes:args.maxBytes-d.bytes,onBytes:n=>{d.bytes+=n-observedBytes;observedBytes=n;}});
  try {
-  context=await engine.launch({path:profile,browser,config:launchConfig({browser,headed:args.headed,proxy,permissions:[],userAgent:agent,
+  context=await engine.launch({path:profile,browser,config:launchConfig({browser,headed:args.headed,proxy,
    ...(args.headed?{viewport:{width:1100,height:900}}:{})})});
   if(signal.aborted)throw signal.reason;
   signal.addEventListener('abort',()=>context.close().catch(()=>{}),{once:true});
