@@ -10,7 +10,9 @@ export const patronusTools={
  patronus_start:{method:'start',write:true,schema:obj({
    urls:z.array(z.string().url().max(8192)).min(1).max(10),mode:z.enum(['read','download','explore']).default('read'),
    rendering:z.enum(['auto','http','browser']).default('auto'),profile:z.string().regex(/^[a-z0-9_-]{1,40}$/).default('public'),
-   maxPages:z.number().int().min(1).max(20).default(3),maxBytes:z.number().int().min(1024).max(2147483648).default(52428800),
+   // Default to the ceiling: the real limits are the disk reserve and artifact quota the engine
+   // enforces. A 50 MB default shared across a multi-URL job starved later pages (2026-10-21 evals).
+   maxPages:z.number().int().min(1).max(20).default(3),maxBytes:z.number().int().min(1024).max(2147483648).default(2147483648),
    timeoutSeconds:z.number().int().min(10).max(3600).default(120),screenshot:z.boolean().default(false),resumeJobId:z.string().uuid().optional(),
    solveCaptchas:z.boolean().default(true),browserWaitSeconds:z.number().int().min(5).max(120).optional(),waitForSelector:z.string().min(1).max(500).optional(),
    browser,headed:z.boolean().optional(),   idempotencyKey:z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
