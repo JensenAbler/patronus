@@ -107,7 +107,7 @@ export class Desktop {
       // Optional owner routes (PATRONUS_EGRESS_ROUTES) send chosen sites out another way.
       const routes = parseRoutes(this.env.PATRONUS_EGRESS_ROUTES);
       this.routedHosts = routes.flatMap(route => route.hosts);
-      this.proxy = await this.startProxy({ maxBytes: Infinity, anyPort: true, routes });
+      this.proxy = await this.startProxy({ maxBytes: Infinity, anyPort: true, routes, egressProxy: this.env.PATRONUS_EGRESS_PROXY || '' });
       markCleanExit(this.profile);
       this.children.chrome = this.spawn(this.chrome,
         chromeArgs({ profile: this.profile, proxy: this.proxy.url, screen: this.screen }), { env, stdio: 'ignore' });

@@ -62,7 +62,7 @@ test('connectVia brackets IPv6 targets', async t => {
 
 test('connectVia fails closed when the proxy refuses or is unavailable', async t => {
   const { port } = await fakeProxy(t, socket => socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
-  await assert.rejects(connectVia({ host: '127.0.0.1', port }, '93.184.216.34', 443), { code: 'ROUTE_REFUSED' });
+  await assert.rejects(connectVia({ host: '127.0.0.1', port }, '93.184.216.34', 443), { code: 'ROUTE_GATEWAY_UNAVAILABLE' });
   const closed = net.createServer();
   await new Promise(resolve => closed.listen(0, '127.0.0.1', resolve));
   const dead = closed.address().port;

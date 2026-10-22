@@ -1,8 +1,7 @@
 import { openSync, fstatSync, readFileSync, closeSync, constants } from 'node:fs';
 import { join } from 'node:path';
-import https from 'node:https';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { resolvePublic, safeURL, fault } from './network.js';
+import { publicRequest, safeURL, fault } from './network.js';
 
 const endpoint='https://api.solvecaptcha.com';
 const knownErrors=new Set(['ERROR_WRONG_USER_KEY','ERROR_KEY_DOES_NOT_EXIST','ERROR_ZERO_BALANCE','ERROR_NO_SLOT_AVAILABLE','ERROR_CAPTCHA_UNSOLVABLE','ERROR_WRONG_CAPTCHA_ID','ERROR_BAD_PARAMETERS','ERROR_BAD_TOKEN_OR_PAGEURL','ERROR_IP_NOT_ALLOWED','ERROR_METHOD_NOT_SUPPORTED','ERROR_BAD_METHOD','ERROR_TOO_BIG_CAPTCHA_FILESIZE','ERROR_IMAGE_TYPE_NOT_SUPPORTED']);
@@ -25,20 +24,18 @@ export function readSolverConfig(root) {
 // Never place keys in URLs or return provider exception text. No redirects or retries.
 export async function solverTransport(path,params,signal) {
  if(!['/in.php','/res.php'].includes(path))throw fault('SOLVER_ENDPOINT_POLICY');
- const {u,address,family}=await resolvePublic(endpoint+path);
  const body=new URLSearchParams({...params,json:'1'}).toString();
+ let res;
+ try {
+  res=await publicRequest(endpoint+path,{method:'POST',signal,timeout:15000,body,
+   headers:{'content-type':'application/x-www-form-urlencoded','content-length':Buffer.byteLength(body)}});
+ }catch(error){throw signal?.aborted?signal.reason:fault(error.code==='REQUEST_OUTCOME_UNCERTAIN'?'SOLVER_OUTCOME_UNCERTAIN':'SOLVER_NETWORK_ERROR');}
  return new Promise((resolve,reject)=>{
-  const req=https.request(u,{method:'POST',signal,headers:{'content-type':'application/x-www-form-urlencoded','content-length':Buffer.byteLength(body)},
-   lookup:(_h,opts,cb)=>opts?.all?cb(null,[{address,family}]):cb(null,address,family)},res=>{
-   if(res.statusCode!==200){res.destroy();reject(fault('SOLVER_HTTP_ERROR'));return;}
-   const chunks=[];let bytes=0;
-   res.on('data',chunk=>{bytes+=chunk.length;if(bytes>65536){res.destroy();reject(fault('SOLVER_RESPONSE_LIMIT'));}else chunks.push(chunk);});
-   res.on('error',()=>reject(fault('SOLVER_NETWORK_ERROR')));
-   res.on('end',()=>{try{resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));}catch{reject(fault('SOLVER_RESPONSE_INVALID'));}});
-  });
-  req.on('error',()=>reject(signal?.aborted?signal.reason:fault('SOLVER_NETWORK_ERROR')));
-  req.setTimeout(15000,()=>req.destroy());
-  req.end(body);
+  if(res.statusCode!==200){res.destroy();reject(fault('SOLVER_HTTP_ERROR'));return;}
+  const chunks=[];let bytes=0;
+  res.on('data',chunk=>{bytes+=chunk.length;if(bytes>65536){res.destroy();reject(fault('SOLVER_RESPONSE_LIMIT'));}else chunks.push(chunk);});
+  res.on('error',()=>reject(signal?.aborted?signal.reason:fault('SOLVER_OUTCOME_UNCERTAIN')));
+  res.on('end',()=>{try{resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));}catch{reject(fault('SOLVER_RESPONSE_INVALID'));}});
  });
 }
 

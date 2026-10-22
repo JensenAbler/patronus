@@ -155,8 +155,12 @@ run('systemctl','is-active','patronus-gateway.service')
 # Both services are active on the new release: prune older releases, keeping one rollback
 # target (PATRONUS_KEEP_PREVIOUS) and any runtime a kept release symlinks into. A pruning
 # problem is reported but never fails an activation that already succeeded.
-prune=subprocess.run([sys.executable,str(source/'scripts'/'prune-releases.py'),'--current',revision,
- '--unit',str(unit_path),'--unit',str(gateway_path)],capture_output=True,text=True)
-try: pruned=json.loads(prune.stdout) if prune.returncode==0 else {'error':prune.stderr.strip()[-500:]}
-except ValueError: pruned={'error':'unreadable prune output'}
+# Explicit retention mode skips only pruning, never browser policy installation.
+if os.environ.get('PATRONUS_SKIP_PRUNE')=='1':
+ pruned={'skipped':True,'reason':'PATRONUS_SKIP_PRUNE'}
+else:
+ prune=subprocess.run([sys.executable,str(source/'scripts'/'prune-releases.py'),'--current',revision,
+  '--unit',str(unit_path),'--unit',str(gateway_path)],capture_output=True,text=True)
+ try: pruned=json.loads(prune.stdout) if prune.returncode==0 else {'error':prune.stderr.strip()[-500:]}
+ except ValueError: pruned={'error':'unreadable prune output'}
 print(json.dumps({'revision':revision,'services':['patronus','patronus-gateway'],'source':str(target),'prune':pruned}))

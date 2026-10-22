@@ -49,7 +49,7 @@ test('starts display, window manager and Chrome on a private persistent profile 
   assert.equal(spawned[2].opts.env.DISPLAY, ':42');
   assert.ok(spawned[2].args.includes('--user-data-dir=' + join(root, 'desktop-profile')));
   assert.equal(statSync(join(root, 'desktop-profile')).mode & 0o777, 0o700);
-  assert.deepEqual(proxies[0].options, { maxBytes: Infinity, anyPort: true, routes: [] });
+  assert.deepEqual(proxies[0].options, { maxBytes: Infinity, anyPort: true, routes: [], egressProxy: '' });
   assert.ok(desktop.healthy());
   await desktop.stop();
   assert.deepEqual(spawned.map(c => c.signals[0]), ['SIGTERM', 'SIGTERM', 'SIGTERM']);
@@ -93,4 +93,14 @@ test('only the desktop proxy policy admits non-default ports; private targets st
   assert.equal(safeURL('https://example.com:2222/', { anyPort: true }).port, '2222');
   assert.throws(() => safeURL('ftp://example.com/', { anyPort: true }), { code: 'URL_POLICY' });
   assert.throws(() => safeURL('https://u:p@example.com/', { anyPort: true }), { code: 'URL_POLICY' });
+});
+
+test('desktop forwards its default proxy together with domain overrides', async t => {
+  const { desktop, proxies } = harness(t);
+  desktop.env.PATRONUS_EGRESS_PROXY = 'http://127.0.0.1:1056';
+  desktop.env.PATRONUS_EGRESS_ROUTES = 'special.test=http://127.0.0.1:2000';
+  await desktop.start();
+  assert.equal(proxies[0].options.egressProxy, 'http://127.0.0.1:1056');
+  assert.deepEqual(proxies[0].options.routes, [{ hosts: ['special.test'], host: '127.0.0.1', port: 2000 }]);
+  await desktop.stop();
 });
