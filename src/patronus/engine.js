@@ -1,3 +1,4 @@
+import { extractAudio } from './audio.js';
 import { computerLogin } from './computer-login.js';
 import { DesktopControl } from './desktop-control.js';
 import { startDesktopCaptcha, cropFrame, validateCrop } from './desktop-captcha.js';
@@ -41,7 +42,7 @@ export class Patronus {
  save(d){this.db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify(d),d.jobId);}
  get(id){const r=this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);if(!r)throw fault('NOT_FOUND');return {args:JSON.parse(r.input),data:JSON.parse(r.data)};}
  status({jobId}){return this.get(jobId).data;}
- capabilities(){return {name:'Patronus',version:'0.5.0',home:'Alpha',loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],browsers:[...BROWSERS],headed:'Optional per job on the service-local Xvfb display; no remote viewer.',inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'},desktop:this.desktop?this.desktop.status():{enabled:false},desktopControlLease:this.desktopLease.status(),desktopControl:{nativeGuardVersion:1,readerOwnedLease:true,cursorNeutralComparison:true,guardedActions:['click','drag','solveCaptcha'],replay:'Guarded native input never replays; recover the paid solver with its original key.'}};}
+ capabilities(){return {name:'Patronus',version:'0.5.0',home:'Alpha',audio:{downloadExtraction:true,segmentSeconds:30,artifactDelivery:'First page of each audioSegment artifact includes an MCP audio block; client/model audio support must be verified separately.'},loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],browsers:[...BROWSERS],headed:'Optional per job on the service-local Xvfb display; no remote viewer.',inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'},desktop:this.desktop?this.desktop.status():{enabled:false},desktopControlLease:this.desktopLease.status(),desktopControl:{nativeGuardVersion:1,readerOwnedLease:true,cursorNeutralComparison:true,guardedActions:['click','drag','solveCaptcha'],replay:'Guarded native input never replays; recover the paid solver with its original key.'}};}
  login({account,timeoutSeconds=180,idempotencyKey,solveCaptchas=true,sessionOnly=false,headed=false,screenshots=false,interaction='programmatic',browser}){
   if(account!=='x10')throw fault('ACCOUNT_UNSUPPORTED');
   if(!Number.isInteger(timeoutSeconds)||timeoutSeconds<30||timeoutSeconds>(interaction==='computer-use'?900:300))throw fault('LOGIN_TIMEOUT_POLICY');
@@ -252,7 +253,7 @@ export class Patronus {
  artifact({jobId,artifactId,cursor=0,limit=16000}){
   const a=this.get(jobId).data.artifacts.find(a=>a.artifactId===artifactId);if(!a)throw fault('NOT_FOUND');
   const fd=openSync(join(this.root,'jobs',jobId,artifactId),'r');let b=Buffer.alloc(Math.min(limit,Math.max(0,a.bytes-cursor)));try{b=b.subarray(0,readSync(fd,b,0,b.length,cursor));}finally{closeSync(fd);}
-  return {...a,encoding:'base64',content:b.toString('base64'),nextCursor:cursor+b.length<a.bytes?cursor+b.length:null};
+  return {...a,encoding:'base64',content:b.toString('base64'),nextCursor:cursor+b.length<a.bytes?cursor+b.length:null,...(cursor===0&&a.audioSegment&&a.complete?{audio:readFileSync(join(this.root,'jobs',jobId,artifactId)).toString('base64'),audioMimeType:a.mimeType}:{} )};
  }
  budget(d,args,extra=0){
   const st=statfsSync(this.root);if(st.bavail*st.bsize<2147483648)throw fault('STORAGE_FULL');
@@ -474,6 +475,16 @@ export class Patronus {
       if(args.resumeJobId){const old=this.get(args.resumeJobId).data;const a=old.artifacts.find(a=>!a.complete&&a.resumable);if(!a)throw fault('RESUME_UNAVAILABLE');resume={...a,path:join(this.root,'jobs',args.resumeJobId,a.artifactId)};}
       const name=decodeURIComponent(new URL(raw).pathname.split('/').pop()||'download');
       const r=await this.bytes(raw,d,args,controller.signal,{file:true,name,headers,resume});out={url:displayURL(r.url),artifactId:r.artifact.artifactId,route:'http',coverage:{complete:true}};
+      if(/^(audio|video)\//.test(r.artifact.mimeType)){
+       try{
+        out.audio=await extractAudio(join(this.root,'jobs',d.jobId,r.artifact.artifactId),{signal:controller.signal,onSegment:({bytes,startSeconds,durationSeconds,index})=>{
+         this.budget(d,args,bytes.length);d.bytes+=bytes.length;
+         const artifactId=randomUUID();writeFileSync(join(this.root,'jobs',d.jobId,artifactId),bytes,{mode:0o600});
+         d.artifacts.push({artifactId,name:'audio-'+String(index).padStart(5,'0')+'.mp3',mimeType:'audio/mpeg',bytes:bytes.length,sha256:digest(bytes),complete:true,audioSegment:true,sourceArtifactId:r.artifact.artifactId,startSeconds,durationSeconds,untrustedContent:true});this.save(d);
+        }});
+       }catch(e){out.audio={available:false,partial:d.artifacts.some(a=>a.sourceArtifactId===r.artifact.artifactId),code:e.code==='ENOENT'?'AUDIO_TOOLS_MISSING':'AUDIO_EXTRACTION_FAILED'};addWarning(d,{code:out.audio.code,url:displayURL(raw),message:'Original download retained; audio extraction did not complete. Inspect segment coverage.'});}
+      }
+
      }else{
       const useBrowser=args.rendering==='browser'||args.profile!=='public'||args.rendering==='auto';
       if(useBrowser)out=await this.browser(raw,d,args,controller.signal);

@@ -50,6 +50,10 @@ export async function createApp(config) {
     content.push({type:'image',data:data.screenshot,mimeType:data.screenshotMimeType||'image/jpeg'});
     const {screenshot,screenshotMimeType,...rest}=data;data={...rest,screenshot:'[returned as image]'};
    }
+   if(data.ok&&typeof data.audio==='string'&&data.audioMimeType==='audio/mpeg'){
+    content.push({type:'audio',data:data.audio,mimeType:data.audioMimeType});
+    const {audio,audioMimeType,...rest}=data;data={...rest,audio:'[returned as audio]',audioMimeType};
+   }
    content.push({type:'text',text:JSON.stringify(data)});
    return {content,structuredContent:data,...(!data.ok?{isError:true}:{})};
   });

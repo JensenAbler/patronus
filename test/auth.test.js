@@ -331,3 +331,30 @@ test('a desktop screenshot comes back as an MCP image block, with base64 strippe
     assert.equal(caps.content[0].type, 'text');
   } finally { await client.close(); }
 });
+
+test('an audio artifact comes back as an authenticated MCP audio block', async (t) => {
+  const mp3 = Buffer.from('\xff\xd8\xfftiny-jpeg-bytes', 'binary').toString('base64');
+  const f = await fixture(t, { integrated: true, call: async (name, args) => {
+    if (name !== 'patronus_artifact') return { name: 'Patronus', version: '0.5.0' };
+    return { artifactId: args.artifactId, audio: mp3, audioMimeType: 'audio/mpeg' };
+  }});
+  const registration = await f.register();
+  const grant = await f.flow(registration, { scope: 'patronus:read offline_access' });
+  const token = await (await f.exchange(registration, grant)).json();
+  const client = new Client({ name: 'image-probe', version: '1.0.0' });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(f.resource), { requestInit: { headers: { Authorization: 'Bearer ' + token.access_token } } }));
+    const shot = await client.callTool({ name: 'patronus_artifact', arguments: { jobId: '11111111-1111-4111-8111-111111111111', artifactId: '22222222-2222-4222-8222-222222222222' } });
+    const image = shot.content.find(c => c.type === 'audio');
+    const text = shot.content.find(c => c.type === 'text');
+    assert.ok(image, 'image block present');
+    assert.equal(image.data, mp3);
+    assert.equal(image.mimeType, 'audio/mpeg');
+    assert.ok(!text.text.includes(mp3), 'base64 not duplicated in text');
+    assert.ok(text.text.includes('[returned as audio]'));
+    assert.equal(shot.structuredContent.audio, '[returned as audio]');
+    const caps = await client.callTool({ name: 'patronus_capabilities', arguments: {} });
+    assert.equal(caps.content.length, 1);
+    assert.equal(caps.content[0].type, 'text');
+  } finally { await client.close(); }
+});

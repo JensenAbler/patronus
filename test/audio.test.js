@@ -1,0 +1,38 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,writeFileSync,rmSync,readFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {execFileSync} from 'node:child_process';
+import {extractAudio} from '../src/patronus/audio.js';
+import {Patronus} from '../src/patronus/engine.js';
+import {Readable} from 'node:stream';
+test('download extracts ordered audio segments and first artifact page supplies real audio',async t=>{
+ const root=mkdtempSync(join(tmpdir(),'patronus-audio-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const source=join(root,'source.wav');
+ execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:duration=31','-c:a','pcm_s16le',source]);
+ const body=readFileSync(source);
+ const engine=new Patronus(join(root,'reader'),{requestFn:async url=>{const response=Readable.from([body]);response.statusCode=200;response.headers={'content-type':'audio/wav','content-length':String(body.length)};return {response,url};}});
+ t.after(()=>engine.close());
+ const job=engine.start({urls:['https://example.com/song.wav'],mode:'download',profile:'public',maxBytes:10000000,maxPages:1,timeoutSeconds:30,idempotencyKey:'audio-test-download'});
+ await engine.tick();const done=engine.status({jobId:job.jobId});
+ assert.equal(done.state,'succeeded',JSON.stringify(done.obstacles));
+ const segments=done.artifacts.filter(a=>a.audioSegment);
+ assert.equal(segments.length,2);assert.deepEqual(segments.map(a=>a.startSeconds),[0,30]);
+ assert.ok(segments[1].durationSeconds<=1.01);
+ const first=engine.artifact({jobId:job.jobId,artifactId:segments[0].artifactId,limit:17});
+ assert.equal(first.nextCursor,17);assert.equal(first.audioMimeType,'audio/mpeg');
+ assert.equal(Buffer.from(first.audio,'base64').length,segments[0].bytes);
+ assert.equal(engine.artifact({jobId:job.jobId,artifactId:segments[0].artifactId,cursor:17,limit:17}).audio,undefined);
+ assert.equal(engine.artifact({jobId:job.jobId,artifactId:done.artifacts[0].artifactId}).audio,undefined);
+});
+test('no-audio video, malformed media and playlists are not presented as heard audio',async t=>{
+ const root=mkdtempSync(join(tmpdir(),'patronus-audio-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const source=join(root,'silent.mp4');
+ execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=size=32x32:duration=0.1','-an',source]);
+ assert.equal((await extractAudio(source)).reason,'NO_AUDIO_STREAM');
+ const playlist=join(root,'playlist.m3u8');writeFileSync(playlist,'#EXTM3U\n#EXTINF:1,\nhttp://127.0.0.1/private\n');
+ await assert.rejects(extractAudio(playlist));
+ const controller=new AbortController();controller.abort();
+ await assert.rejects(extractAudio(source,{signal:controller.signal}));
+});

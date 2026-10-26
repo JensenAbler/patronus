@@ -53,3 +53,7 @@ provisioned `profiles/<name>/access.json` imports into either. The same proxy,
 request policy and byte budget apply; Firefox gets equivalent prefs for QUIC,
 WebRTC, DoH and background services. Its content sandbox needs the installer's
 exact-path AppArmor userns grant to keep PID/user namespaces.
+
+### Audio downloads
+
+Direct audio/video downloads retain the original and extract ordered 30-second MP3 artifacts with start and duration metadata. Requires ffmpeg and ffprobe. Request the first page of each audioSegment artifact to receive an MCP audio content block; subsequent byte pages preserve ordinary download behavior. Extraction failures retain the original and report partial coverage. Audio delivery does not imply transcription or that the client/model can hear the audio; verify client support separately.
