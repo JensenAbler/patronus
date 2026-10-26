@@ -54,6 +54,7 @@ if not shutil.which('xvfb-run') or not shutil.which('xauth'): raise SystemExit('
 # profile (/etc/apparmor.d/chrome) grants its sandbox user namespaces, so none is added here.
 for tool in ['google-chrome','Xvfb','openbox','pulseaudio','speech-dispatcher']:
  if not shutil.which(tool): raise SystemExit('Install '+tool+' before activation (desktop session)')
+audio_credential='LoadCredential=audio-api-key:/etc/patronus/audio-api-key' if pathlib.Path('/etc/patronus/audio-api-key').is_file() else ''
 unit=f"""[Unit]
 Description=Patronus persistent web reader
 After=network-online.target
@@ -68,6 +69,7 @@ Environment=PATRONUS_DESKTOP=1
 Environment=PATRONUS_NATIVE_DESKTOP=1
 # Optional owner egress routes, e.g. PATRONUS_EGRESS_ROUTES=benefitscal.com=http://127.0.0.1:1056
 EnvironmentFile=-/etc/patronus/egress.env
+{audio_credential}
 UMask=0077
 RuntimeDirectory=patronus
 RuntimeDirectoryMode=0750

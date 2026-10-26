@@ -1,3 +1,4 @@
+import { analyzeAudio, selectAudio } from './audio-understanding.js';
 import { extractAudio } from './audio.js';
 import { computerLogin } from './computer-login.js';
 import { DesktopControl } from './desktop-control.js';
@@ -42,7 +43,7 @@ export class Patronus {
  save(d){this.db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify(d),d.jobId);}
  get(id){const r=this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id);if(!r)throw fault('NOT_FOUND');return {args:JSON.parse(r.input),data:JSON.parse(r.data)};}
  status({jobId}){return this.get(jobId).data;}
- capabilities(){return {name:'Patronus',version:'0.5.0',home:'Alpha',audio:{downloadExtraction:true,segmentSeconds:30,artifactDelivery:'First page of each audioSegment artifact includes an MCP audio block; client/model audio support must be verified separately.'},loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],browsers:[...BROWSERS],headed:'Optional per job on the service-local Xvfb display; no remote viewer.',inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'},desktop:this.desktop?this.desktop.status():{enabled:false},desktopControlLease:this.desktopLease.status(),desktopControl:{nativeGuardVersion:1,readerOwnedLease:true,cursorNeutralComparison:true,guardedActions:['click','drag','solveCaptcha'],replay:'Guarded native input never replays; recover the paid solver with its original key.'}};}
+ capabilities(){return {name:'Patronus',version:'0.5.0',home:'Alpha',audio:{understanding:{configured:Boolean(process.env.CREDENTIALS_DIRECTORY),provider:'Google Gemini',model:process.env.PATRONUS_AUDIO_MODEL||'gemini-3.8-flash',startArgument:'audioAnalysis; use urls:[]; results via patronus_result; explicit calls may incur provider charges'},downloadExtraction:true,segmentSeconds:30,artifactDelivery:'First page of each audioSegment artifact includes an MCP audio block; client/model audio support must be verified separately.'},loginAccounts:['x10'],modes:['read','download','explore','login'],rendering:['http','browser','auto'],browsers:[...BROWSERS],headed:'Optional per job on the service-local Xvfb display; no remote viewer.',inputPolicy:'Existing profiles only; no waiting for user state.',profiles:readdirSync(join(this.root,'profiles')).filter(n=>/^[a-z0-9_-]{1,40}$/.test(n)),limits:{activeJobs:1,queuedJobs:50,maxBytes:2147483648,maxPages:20,diskReserveBytes:2147483648,artifactQuotaBytes:10737418240},limitations:['Direct HTTP downloads; no Mega decryption adapter','No purchases, posting or interactive credential requests; optional SolveCaptcha supports reCAPTCHA v2, standalone Turnstile, hCaptcha and identified image CAPTCHAs','Retrieval permits GET/HEAD and parsed same-origin HTTPS GraphQL queries; explicit X10 login alone permits its credential submission and normal checkbox verification plus configured CAPTCHA solving','Interrupted navigation is reported, not replayed','No universal third-party access guarantee','Browser profiles must be provisioned outside runs'],security:{browserSandbox:true,publicNetworkOnly:true,identity:agent,artifactAccess:'authenticated tool bytes'},desktop:this.desktop?this.desktop.status():{enabled:false},desktopControlLease:this.desktopLease.status(),desktopControl:{nativeGuardVersion:1,readerOwnedLease:true,cursorNeutralComparison:true,guardedActions:['click','drag','solveCaptcha'],replay:'Guarded native input never replays; recover the paid solver with its original key.'}};}
  login({account,timeoutSeconds=180,idempotencyKey,solveCaptchas=true,sessionOnly=false,headed=false,screenshots=false,interaction='programmatic',browser}){
   if(account!=='x10')throw fault('ACCOUNT_UNSUPPORTED');
   if(!Number.isInteger(timeoutSeconds)||timeoutSeconds<30||timeoutSeconds>(interaction==='computer-use'?900:300))throw fault('LOGIN_TIMEOUT_POLICY');
@@ -232,6 +233,8 @@ export class Patronus {
   }finally{if(this.desktopControl)this.desktopControl.inputContext=null;this.desktopBusy=false;}
  }
  start(args){
+  if(args.audioAnalysis){if(args.urls.length||args.mode!=='read'||args.resumeJobId)throw fault('AUDIO_ARGUMENT_CONFLICT');selectAudio(this,args.audioAnalysis);}
+  else if(!args.urls.length)throw fault('URL_REQUIRED');
   for(const u of args.urls)safeURL(u);
   // Browser selection only means something when a browser renders the page.
   if((args.browser==='firefox'||args.headed)&&args.rendering==='http')throw fault('RENDERING_CONFLICT','browser and headed require browser or auto rendering.');
@@ -451,6 +454,7 @@ export class Patronus {
   const output=[],pending=[...args.urls],seen=new Set();
   const persist=()=>{const path=join(this.root,'jobs',d.jobId,'result.json');writeFileSync(path+'.tmp',JSON.stringify(output),{mode:0o600});renameSync(path+'.tmp',path);this.save(d);};
   try{
+   if(args.audioAnalysis){await (this.audioAnalyzer||analyzeAudio)(this,d,args,controller.signal,out=>{output.push(out);d.pages.push({title:out.title,route:out.route});persist();});}
    while(pending.length && seen.size<(args.mode==='explore'?args.maxPages:args.urls.length)){
     if(controller.signal.aborted)throw controller.signal.reason;
     const raw=pending.shift();if(seen.has(raw))continue;seen.add(raw);

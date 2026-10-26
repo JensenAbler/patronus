@@ -57,3 +57,7 @@ exact-path AppArmor userns grant to keep PID/user namespaces.
 ### Audio downloads
 
 Direct audio/video downloads retain the original and extract ordered 30-second MP3 artifacts with start and duration metadata. Requires ffmpeg and ffprobe. Request the first page of each audioSegment artifact to receive an MCP audio content block; subsequent byte pages preserve ordinary download behavior. Extraction failures retain the original and report partial coverage. Audio delivery does not imply transcription or that the client/model can hear the audio; verify client support separately.
+
+### Audio understanding
+
+Explicit patronus_start calls with urls:[] and audioAnalysis:{sourceJobId,sourceArtifactId,question,startSeconds?,endSeconds?,previousJobId?} send only extracted audio to Google Gemini. Configure /etc/patronus/audio-api-key privately; systemd passes it as a credential. PATRONUS_AUDIO_MODEL defaults to gemini-3.8-flash. Read attributed observations and exact submitted clip coverage through patronus_result. Ranges select overlapping 30-second clips, not exact crops. Large selections use bounded batches; each result reports its coverage. Questions may incur API charges. Same-key recovery never replays paid calls, including interruptions and uncertain failures. A follow-up can reference a previous analysis of the same source; prior prose is unverified context. No runtime Praxis dependency.
