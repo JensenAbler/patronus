@@ -108,6 +108,16 @@ test('comparison-only option never expands supported native actions or bypasses 
  f.e.desktopLease.release(owner);assert.deepEqual(f.modes,[]);
 });
 
+test('wait honors caller waitSeconds and the schema bounds it',async t=>{
+ const f=engine(t),start=Date.now();
+ const r=await f.e.desktopAction({action:'wait',waitSeconds:0.5,idempotencyKey:'wait_seconds_fixture'});
+ assert.equal(r.waited,true);assert.equal(r.waitedMs,500);assert.ok(Date.now()-start>=480);
+ const s=patronusTools.patronus_desktop.schema;
+ assert.equal(s.safeParse({action:'wait',waitSeconds:60,idempotencyKey:'wait_bound_ok'}).success,true);
+ assert.equal(s.safeParse({action:'wait',waitSeconds:61,idempotencyKey:'wait_bound_bad'}).success,false);
+ assert.equal(s.safeParse({action:'click',x:1,y:1,waitSeconds:5,idempotencyKey:'click_wait_ok'}).success,true);
+});
+
 test('comparison screenshot mode survives paid solver source/status and cannot mix with normal source',async t=>{
  const f=engine(t);
  const frame=await f.e.desktopAction({action:'screenshot',comparisonOnly:true,idempotencyKey:'solver_comparison_source'});

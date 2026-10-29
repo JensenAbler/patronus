@@ -214,10 +214,12 @@ export class Patronus {
     result=await c.navigate(args.url);
     try{this.desktopNavigatedOrigin=new URL(args.url).origin;}catch{}
    }else if(action==='wait'){
-    await new Promise(r=>setTimeout(r,1500));result={waited:true};
+    // Deliberately dumb: the caller judges how long a slow page needs (2026-10-29).
+    const waitedMs=args.waitSeconds!==undefined?Math.round(args.waitSeconds*1000):1500;
+    await new Promise(r=>setTimeout(r,waitedMs));result={waited:true,waitedMs};
    }else if(action!=='screenshot')throw fault('DESKTOP_ACTION_POLICY');
    // Let the page settle, then always return a fresh view.
-   if(action!=='screenshot'&&action!=='wait')await new Promise(r=>setTimeout(r,400));
+   if(action!=='screenshot'&&action!=='wait')await new Promise(r=>setTimeout(r,args.waitSeconds!==undefined?Math.round(args.waitSeconds*1000):400));
    const frame=await c.screenshot({comparisonOnly});
    if(frame.length>4194304)throw fault('DESKTOP_SCREENSHOT_LIMIT');
    await retainGuardedEvidence(this,args,frame,'returned');
