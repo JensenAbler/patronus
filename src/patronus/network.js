@@ -46,7 +46,10 @@ export async function resolvePublic(raw, resolver=lookup, { anyPort = false } = 
   const u=safeURL(raw,{anyPort}), hostname=u.hostname.replace(/^\[|\]$/g,'');
   const rows=await resolver(hostname,{all:true});
   if (!rows.length || rows.some(r=>!isPublic(r.address))) throw fault('NETWORK_POLICY','Destination is not a public address.');
-  return {u,address:rows[0].address,family:rows[0].family};
+  // Prefer IPv4: upstream exit nodes (e.g. Tailscale via a phone) may lack IPv6,
+  // and their CONNECT proxy refuses IPv6 targets, which breaks every tunnel.
+  const pick=rows.find(r=>r.family===4||net.isIPv4(r.address))||rows[0];
+  return {u,address:pick.address,family:pick.family};
 }
 // One public-address-pinned transport for retrievals, browser HTTP, and provider
 // POSTs. Prefer the configured upstream; availability fallback happens only

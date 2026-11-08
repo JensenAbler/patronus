@@ -11,6 +11,8 @@ test('Patronus rejects internal addresses and mixed DNS answers',async()=>{
  for(const ip of ['127.0.0.1','10.0.0.1','169.254.169.254','::1','::ffff:127.0.0.1','fc00::1','0.0.0.0','192.168.2.3'])assert.equal(isPublic(ip),false,ip);
  assert.equal(isPublic('1.1.1.1'),true);
  await assert.rejects(resolvePublic('https://test.example',async()=>[{address:'1.1.1.1',family:4},{address:'127.0.0.1',family:4}]),{code:'NETWORK_POLICY'});
+ assert.equal((await resolvePublic('https://test.example',async()=>[{address:'2606:4700::1111',family:6},{address:'1.1.1.1',family:4}])).address,'1.1.1.1');
+ assert.equal((await resolvePublic('https://test.example',async()=>[{address:'2606:4700::1111',family:6}])).address,'2606:4700::1111');
  for(const u of ['file:///etc/passwd','http://u:p@example.com','http://example.com:22'])assert.throws(()=>safeURL(u));
  assert.equal(displayURL('https://e.com/x?token=secret#secret'),'https://e.com/x?token=%5Bredacted%5D');
 });
